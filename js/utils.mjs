@@ -1,0 +1,134 @@
+const STUDENT_NUMBER_PATTERN = /^20\d{8}$/;
+const AUTH_EMAIL_DOMAIN = "accounts.wenyuan.invalid";
+
+export function validateStudentNumber(value) {
+  return STUDENT_NUMBER_PATTERN.test(String(value ?? "").trim());
+}
+
+export function validatePassword(value) {
+  const password = String(value ?? "");
+  return password.length >= 8 && /[A-Za-z]/.test(password) && /\d/.test(password);
+}
+
+export function studentNumberToAuthEmail(value) {
+  const studentNumber = String(value ?? "").trim();
+  if (!validateStudentNumber(studentNumber)) {
+    throw new Error("学号格式不正确");
+  }
+  return `${studentNumber}@${AUTH_EMAIL_DOMAIN}`;
+}
+
+export function formatDate(value) {
+  if (!value) return "未记录";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "未记录";
+  return new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  }).format(date);
+}
+
+export function createExcerpt(value, limit = 96) {
+  const normalized = String(value ?? "").replace(/\s+/g, " ").trim();
+  const characters = Array.from(normalized);
+  if (characters.length <= limit) return normalized;
+  return `${characters.slice(0, limit).join("")}…`;
+}
+
+export function countChineseText(value) {
+  return Array.from(String(value ?? "").replace(/\s/g, "")).length;
+}
+
+export function buildCommentTree(comments = []) {
+  const nodes = new Map(
+    comments.map((comment) => [
+      String(comment.id),
+      { ...comment, replies: [] },
+    ]),
+  );
+  const roots = [];
+
+  for (const comment of comments) {
+    const node = nodes.get(String(comment.id));
+    const parent = comment.parent_id
+      ? nodes.get(String(comment.parent_id))
+      : null;
+    if (parent && parent.id !== node.id) {
+      parent.replies.push(node);
+    } else {
+      roots.push(node);
+    }
+  }
+
+  const byCreatedAt = (left, right) =>
+    new Date(left.created_at ?? 0) - new Date(right.created_at ?? 0);
+  const sortBranch = (branch) => {
+    branch.sort(byCreatedAt);
+    branch.forEach((comment) => sortBranch(comment.replies));
+    return branch;
+  };
+
+  return sortBranch(roots);
+}
+
+export function parseRoute(hash = "#/") {
+  const path = String(hash || "#/")
+    .replace(/^#/, "")
+    .split("?")[0]
+    .replace(/\/+$/, "") || "/";
+  const parts = path.split("/").filter(Boolean);
+
+  if (parts.length === 0) return { name: "home" };
+  if (parts.length === 1 && parts[0] === "write") return { name: "write" };
+  if (parts.length === 1 && parts[0] === "discussions") {
+    return { name: "discussions" };
+  }
+  if (parts.length === 1 && parts[0] === "submissions") {
+    return { name: "submissions" };
+  }
+  if (parts.length === 2 && parts[0] === "works") {
+    return { name: "work", id: decodeURIComponent(parts[1]) };
+  }
+  if (parts.length === 2 && parts[0] === "authors") {
+    return { name: "author", id: decodeURIComponent(parts[1]) };
+  }
+  return { name: "not-found" };
+}
+
+export function filterAndSortWorks(works = [], filters = {}) {
+  const query = String(filters.query ?? "").trim().toLocaleLowerCase("zh-CN");
+  const category = filters.category || "全部";
+  const sort = filters.sort || "latest";
+
+  const filtered = works.filter((work) => {
+    const categoryMatches =
+      category === "全部" || String(work.category) === category;
+    const haystack = [
+      work.title,
+      work.excerpt,
+      work.author_pen_name,
+    ]
+      .map((value) => String(value ?? "").toLocaleLowerCase("zh-CN"))
+      .join("\n");
+    return categoryMatches && (!query || haystack.includes(query));
+  });
+
+  const sorters = {
+    latest: (left, right) =>
+      new Date(right.created_at ?? 0) - new Date(left.created_at ?? 0),
+    likes: (left, right) =>
+      Number(right.like_count ?? 0) - Number(left.like_count ?? 0) ||
+      new Date(right.created_at ?? 0) - new Date(left.created_at ?? 0),
+    discussions: (left, right) =>
+      Number(right.comment_count ?? 0) - Number(left.comment_count ?? 0) ||
+      new Date(right.created_at ?? 0) - new Date(left.created_at ?? 0),
+  };
+
+  return [...filtered].sort(sorters[sort] ?? sorters.latest);
+}
+
+export function escapeText(value) {
+  return value == null ? "" : String(value);
+}
