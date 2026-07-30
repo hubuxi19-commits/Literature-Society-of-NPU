@@ -639,15 +639,12 @@ function createSupabaseService(config) {
     async setFeatured(workId, featured) {
       await requireRemoteSession();
       const client = await getClient();
-      const { data, error } = await client
-        .from("works")
-        .update({ is_featured: Boolean(featured) })
-        .eq("id", workId)
-        .select("*, profiles!works_author_id_fkey(pen_name,bio,role)")
-        .single();
+      const { error } = await client.rpc("set_work_featured", {
+        target_work_id: workId,
+        featured: Boolean(featured),
+      });
       if (error) throw new Error(error.message);
-      const [work] = await enrichRemoteWorks(client, [data]);
-      return work;
+      return service.getWork(workId);
     },
   };
 
