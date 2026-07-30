@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta
+      name="description"
+      content="西北工业大学学生文学社作品交流平台——持续发布、阅读与讨论。"
+    >
+    <meta name="theme-color" content="#f3eee3">
+    <title>文苑 · 西北工业大学学生文学社</title>
+    <link rel="stylesheet" href="./assets/styles.css">
+  </head>
+  <body>
+    <a class="skip-link" href="#app">跳到主要内容</a>
+
+    <div class="demo-ribbon" id="demoRibbon" hidden>
+      <span>当前为演示模式</span>
+      <span>示例内容只保存在本次浏览器会话中</span>
+    </div>
+
+    <header class="site-header" data-testid="site-header">
+      <div class="header-inner">
+        <a class="brand" href="#/" aria-label="文苑首页">
+          <span class="brand-mark" aria-hidden="true">文苑</span>
+          <span class="brand-copy">
+            <strong>西北工业大学学生文学社</strong>
+            <small>作品交流平台</small>
+          </span>
+        </a>
+
+        <button
+          class="menu-toggle"
+          type="button"
+          data-action="toggle-menu"
+          aria-controls="primaryNavigation"
+          aria-expanded="false"
+        >
+          <span>菜单</span>
+          <span class="menu-lines" aria-hidden="true"></span>
+        </button>
+
+        <nav class="primary-nav" id="primaryNavigation" aria-label="主要导航">
+          <a href="#/" data-nav="home">新作</a>
+          <a href="#/discussions" data-nav="discussions">讨论</a>
+          <a href="#/submissions" data-nav="submissions">征稿</a>
+        </nav>
+
+        <div class="header-actions">
+          <a class="write-link" href="#/write">开始写作</a>
+          <button
+            class="text-button"
+            type="button"
+            id="accountButton"
+            data-action="open-auth"
+          >
+            登录
+          </button>
+          <div class="account-menu" id="accountMenu" hidden>
+            <a id="profileLink" href="#/">我的主页</a>
+            <button type="button" data-action="logout">退出登录</button>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <main id="app" tabindex="-1">
+      <div class="loading-state" role="status">
+        <span class="loading-rule"></span>
+        <p>正在整理稿页</p>
+      </div>
+    </main>
+
+    <footer class="site-footer">
+      <div>
+        <p class="footer-title">文苑 · 西北工业大学学生文学社</p>
+        <p>让作品被认真阅读，让讨论回到文字本身。</p>
+      </div>
+      <div class="footer-links">
+        <a href="#/submissions">征稿与规则</a>
+        <a href="./SECURITY.md">安全说明</a>
+        <a href="./README.md">项目说明</a>
+      </div>
+      <p class="footer-meta">持续更新的社员作品交流空间</p>
+    </footer>
+
+    <dialog class="modal auth-dialog" id="authDialog" aria-labelledby="authTitle">
+      <div class="modal-head">
+        <div>
+          <p class="eyebrow">MEMBER ACCESS</p>
+          <h2 id="authTitle">进入文学社</h2>
+        </div>
+        <button
+          class="close-button"
+          type="button"
+          data-action="close-auth"
+          aria-label="关闭登录窗口"
+        >
+          关闭
+        </button>
+      </div>
+
+      <div class="auth-tabs" role="tablist" aria-label="账户操作">
+        <button
+          id="loginTab"
+          type="button"
+          role="tab"
+          aria-selected="true"
+          aria-controls="loginPanel"
+          data-action="auth-tab"
+          data-tab="login"
+        >
+          登录
+        </button>
+        <button
+          id="registerTab"
+          type="button"
+          role="tab"
+          aria-selected="false"
+          aria-controls="registerPanel"
+          data-action="auth-tab"
+          data-tab="register"
+        >
+          注册
+        </button>
+      </div>
+
+      <section id="loginPanel" role="tabpanel" aria-labelledby="loginTab">
+        <form id="loginForm" class="stack-form">
+          <label>
+            <span>学号</span>
+            <input
+              name="studentNumber"
+              type="text"
+              inputmode="numeric"
+              autocomplete="username"
+              maxlength="10"
+              pattern="20[0-9]{8}"
+              required
+            >
+          </label>
+          <label>
+            <span>密码</span>
+            <input
+              name="password"
+              type="password"
+              autocomplete="current-password"
+              minlength="8"
+              required
+            >
+          </label>
+          <p class="form-message" data-form-message="login" role="status"></p>
+          <button class="primary-button" type="submit">登录并继续</button>
+        </form>
+      </section>
+
+      <section
+        id="registerPanel"
+        role="tabpanel"
+        aria-labelledby="registerTab"
+        hidden
+      >
+        <form id="registerForm" class="stack-form">
+          <label>
+            <span>学号</span>
+            <input
+              name="studentNumber"
+              type="text"
+              inputmode="numeric"
+              autocomplete="username"
+              maxlength="10"
+              pattern="20[0-9]{8}"
+              required
+            >
+          </label>
+          <label>
+            <span>笔名</span>
+            <input
+              name="penName"
+              type="text"
+              autocomplete="nickname"
+              maxlength="24"
+              required
+            >
+          </label>
+          <label>
+            <span>密码</span>
+            <input
+              name="password"
+              type="password"
+              autocomplete="new-password"
+              minlength="8"
+              required
+            >
+            <small>至少八位，并同时包含字母和数字。</small>
+          </label>
+          <p class="privacy-note">
+            学号仅用于登录，不会出现在作者主页、作品或评论中。
+          </p>
+          <p class="form-message" data-form-message="register" role="status"></p>
+          <button class="primary-button" type="submit">注册并进入</button>
+        </form>
+      </section>
+    </dialog>
+
+    <dialog
+      class="modal confirm-dialog"
+      id="confirmDialog"
+      aria-labelledby="confirmTitle"
+    >
+      <p class="eyebrow">请确认</p>
+      <h2 id="confirmTitle">确认操作</h2>
+      <p id="confirmMessage"></p>
+      <div class="modal-actions">
+        <button class="secondary-button" type="button" data-action="cancel-confirm">
+          取消
+        </button>
+        <button class="danger-button" type="button" data-action="accept-confirm">
+          确认
+        </button>
+      </div>
+    </dialog>
+
+    <div class="toast-region" aria-live="polite" aria-atomic="true">
+      <div class="toast" id="toast" hidden></div>
+    </div>
+
+    <script type="module" src="./js/app.js"></script>
+  </body>
+</html>
