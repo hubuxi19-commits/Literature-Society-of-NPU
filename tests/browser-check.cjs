@@ -108,13 +108,51 @@ async function desktopFlow(browser, browserMessages) {
   if ((await page.locator(".reading-title h1").textContent()) !== "末班车经过友谊校区") {
     throw new Error("作品阅读页标题不正确");
   }
-  await expectVisible(page.locator(".reading-body"), "作品正文");
+  const poetryBody = page.locator(".reading-body--poetry");
+  await expectVisible(poetryBody, "诗歌正文");
+  const poetryFirstStanza = poetryBody.locator("p").first();
+  if (!(await poetryFirstStanza.textContent()).includes("\n")) {
+    throw new Error("测试诗歌没有保留作者输入的单次换行");
+  }
+  if (
+    (await poetryFirstStanza.evaluate(
+      (node) => getComputedStyle(node).whiteSpace,
+    )) !== "pre-line"
+  ) {
+    throw new Error("诗歌正文没有保留单次换行");
+  }
+  if (
+    (await poetryFirstStanza.evaluate(
+      (node) => getComputedStyle(node).textIndent,
+    )) !== "0px"
+  ) {
+    throw new Error("诗歌正文不应首行缩进");
+  }
+  if (
+    (await poetryFirstStanza.evaluate((node) =>
+      getComputedStyle(node, "::first-letter").getPropertyValue("float"),
+    )) !== "none"
+  ) {
+    throw new Error("诗歌首字不应浮动放大");
+  }
   await expectNoHorizontalOverflow(page, "桌面阅读页");
   await page.screenshot({
     path: path.join(screenshots, "desktop-reading.png"),
     fullPage: true,
   });
 
+  await goToHash(page, "#/works/work-unnamed-station", "没有名字的车站");
+  const proseBody = page.locator(".reading-body--prose");
+  await expectVisible(proseBody, "小说正文");
+  if (
+    (await proseBody.locator("p").first().evaluate((node) =>
+      getComputedStyle(node, "::first-letter").getPropertyValue("float"),
+    )) !== "left"
+  ) {
+    throw new Error("小说应保留首字装饰");
+  }
+
+  await goToHash(page, "#/works/work-night-bus", "末班车经过友谊校区");
   await login(page, "2023123456", "wenyuan88");
   const likeButton = page.getByRole("button", { name: /喜欢这篇作品|取消喜欢/ });
   const beforeCount = Number(
@@ -228,7 +266,12 @@ async function mobileFlow(browser, browserMessages) {
     .click();
   await page.waitForURL(/#\/works\/work-night-bus$/);
   await page.locator(".reading-title h1").waitFor();
+  await expectVisible(page.locator(".reading-body--poetry"), "移动端诗歌正文");
   await expectNoHorizontalOverflow(page, "移动阅读页");
+  await page.screenshot({
+    path: path.join(screenshots, "mobile-reading.png"),
+    fullPage: true,
+  });
   await context.close();
 }
 

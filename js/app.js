@@ -590,8 +590,13 @@ function createPageHeader(eyebrow, title, description) {
   ]);
 }
 
-function renderParagraphs(content) {
-  const body = element("article", { className: "reading-body" });
+function renderParagraphs(content, category) {
+  const isPoetry = category === "诗歌";
+  const body = element("article", {
+    className: `reading-body ${
+      isPoetry ? "reading-body--poetry" : "reading-body--prose"
+    }`,
+  });
   String(content ?? "")
     .split(/\n\s*\n/)
     .map((paragraph) => paragraph.trim())
@@ -870,7 +875,7 @@ async function renderWork(workId) {
 
     shell.append(
       head,
-      renderParagraphs(work.content),
+      renderParagraphs(work.content, work.category),
       actionBar,
       authorNote,
       commentsBlock,

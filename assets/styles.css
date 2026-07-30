@@ -832,20 +832,28 @@ main {
 
 .reading-body p {
   margin: 0 0 1.65em;
+}
+
+.reading-body--prose p {
   text-indent: 2em;
 }
 
-.reading-body p:first-child {
+.reading-body--prose p:first-child {
   text-indent: 0;
 }
 
-.reading-body p:first-child::first-letter {
+.reading-body--prose p:first-child::first-letter {
   float: left;
   margin: 0.08em 0.12em 0 0;
   color: var(--vermilion);
   font-family: var(--serif-title);
   font-size: 3.4em;
   line-height: 0.8;
+}
+
+.reading-body--poetry p {
+  white-space: pre-line;
+  text-indent: 0;
 }
 
 .work-actions {
