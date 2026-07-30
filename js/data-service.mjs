@@ -1,0 +1,665 @@
+import { demoSeed } from "./demo-data.mjs";
+import {
+  createExcerpt,
+  studentNumberToAuthEmail,
+  validatePassword,
+  validateStudentNumber,
+} from "./utils.mjs";
+
+const SUPABASE_MODULE_URL =
+  "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
+
+function clone(value) {
+  return structuredClone(value);
+}
+
+function makeId(prefix) {
+  const random =
+    globalThis.crypto?.randomUUID?.() ??
+    `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return `${prefix}-${random}`;
+}
+
+function requireText(value, label, maximum) {
+  const text = String(value ?? "").trim();
+  if (!text) throw new Error(`${label}不能为空`);
+  if (Array.from(text).length > maximum) {
+    throw new Error(`${label}不能超过 ${maximum} 字`);
+  }
+  return text;
+}
+
+function createDemoService() {
+  const state = clone(demoSeed);
+  let session = null;
+
+  const getProfileRecord = (profileId) =>
+    state.profiles.find((profile) => profile.id === profileId);
+
+  const requireSession = () => {
+    if (!session) throw new Error("请先登录");
+    return session;
+  };
+
+  const isAdmin = () => session?.profile?.role === "admin";
+
+  const enrichComment = (comment) => {
+    const profile = getProfileRecord(comment.user_id);
+    return {
+      ...clone(comment),
+      user_pen_name: profile?.pen_name ?? "佚名",
+      user_role: profile?.role ?? "member",
+    };
+  };
+
+  const enrichWork = (work) => {
+    const profile = getProfileRecord(work.author_id);
+    const workLikes = state.likes.filter((like) => like.work_id === work.id);
+    const workComments = state.comments.filter(
+      (comment) => comment.work_id === work.id,
+    );
+    return {
+      ...clone(work),
+      author_pen_name: profile?.pen_name ?? "佚名",
+      author_bio: profile?.bio ?? "",
+      author_role: profile?.role ?? "member",
+      like_count: workLikes.length,
+      comment_count: workComments.length,
+      liked_by_current_user: Boolean(
+        session &&
+          workLikes.some((like) => like.user_id === session.profile.id),
+      ),
+    };
+  };
+
+  const service = {
+    mode: "demo",
+    isDemo: true,
+
+    async getSession() {
+      return session ? clone(session) : null;
+    },
+
+    async signIn({ studentNumber, password }) {
+      const normalizedNumber = String(studentNumber ?? "").trim();
+      const account = state.accounts.find(
+        (item) =>
+          item.studentNumber === normalizedNumber && item.password === password,
+      );
+      if (!account) throw new Error("学号或密码不正确");
+      const profile = getProfileRecord(account.profileId);
+      session = {
+        user: { id: profile.id },
+        profile: clone(profile),
+      };
+      return clone(session);
+    },
+
+    async signUp({ studentNumber, password, penName }) {
+      const normalizedNumber = String(studentNumber ?? "").trim();
+      if (!validateStudentNumber(normalizedNumber)) {
+        throw new Error("学号格式不正确");
+      }
+      if (!validatePassword(password)) {
+        throw new Error("密码至少八位，且需要同时包含字母和数字");
+      }
+      if (
+        state.accounts.some(
+          (account) => account.studentNumber === normalizedNumber,
+        )
+      ) {
+        throw new Error("该学号已经注册");
+      }
+      const now = new Date().toISOString();
+      const profile = {
+        id: makeId("profile"),
+        pen_name: requireText(penName, "笔名", 24),
+        bio: "",
+        role: "member",
+        created_at: now,
+        updated_at: now,
+      };
+      state.profiles.push(profile);
+      state.accounts.push({
+        studentNumber: normalizedNumber,
+        password: String(password),
+        profileId: profile.id,
+      });
+      session = {
+        user: { id: profile.id },
+        profile: clone(profile),
+      };
+      return clone(session);
+    },
+
+    async signOut() {
+      session = null;
+    },
+
+    async listWorks() {
+      return state.works
+        .filter((work) => work.status === "published")
+        .map(enrichWork)
+        .sort(
+          (left, right) =>
+            new Date(right.created_at) - new Date(left.created_at),
+        );
+    },
+
+    async getWork(workId) {
+      const work = state.works.find(
+        (item) => item.id === workId && item.status === "published",
+      );
+      if (!work) throw new Error("作品不存在");
+      return {
+        ...enrichWork(work),
+        author_profile: clone(getProfileRecord(work.author_id)),
+        comments: state.comments
+          .filter((comment) => comment.work_id === work.id)
+          .map(enrichComment)
+          .sort(
+            (left, right) =>
+              new Date(left.created_at) - new Date(right.created_at),
+          ),
+      };
+    },
+
+    async createWork(input) {
+      const current = requireSession();
+      const now = new Date().toISOString();
+      const content = requireText(input.content, "正文", 50000);
+      const work = {
+        id: makeId("work"),
+        author_id: current.profile.id,
+        title: requireText(input.title, "标题", 80),
+        excerpt:
+          String(input.excerpt ?? "").trim() || createExcerpt(content, 96),
+        content,
+        category: requireText(input.category, "分类", 12),
+        status: "published",
+        is_featured: false,
+        created_at: now,
+        updated_at: now,
+      };
+      state.works.push(work);
+      return enrichWork(work);
+    },
+
+    async deleteWork(workId) {
+      const current = requireSession();
+      const index = state.works.findIndex((work) => work.id === workId);
+      if (index < 0) throw new Error("作品不存在");
+      const work = state.works[index];
+      if (work.author_id !== current.profile.id && !isAdmin()) {
+        throw new Error("没有权限删除这篇作品");
+      }
+      state.works.splice(index, 1);
+      state.likes = state.likes.filter((like) => like.work_id !== workId);
+      state.comments = state.comments.filter(
+        (comment) => comment.work_id !== workId,
+      );
+    },
+
+    async toggleLike(workId) {
+      const current = requireSession();
+      if (!state.works.some((work) => work.id === workId)) {
+        throw new Error("作品不存在");
+      }
+      const index = state.likes.findIndex(
+        (like) =>
+          like.work_id === workId && like.user_id === current.profile.id,
+      );
+      let liked;
+      if (index >= 0) {
+        state.likes.splice(index, 1);
+        liked = false;
+      } else {
+        state.likes.push({
+          work_id: workId,
+          user_id: current.profile.id,
+        });
+        liked = true;
+      }
+      return {
+        liked,
+        likeCount: state.likes.filter((like) => like.work_id === workId)
+          .length,
+      };
+    },
+
+    async addComment(workId, content, parentId = null) {
+      const current = requireSession();
+      if (!state.works.some((work) => work.id === workId)) {
+        throw new Error("作品不存在");
+      }
+      if (
+        parentId &&
+        !state.comments.some(
+          (comment) => comment.id === parentId && comment.work_id === workId,
+        )
+      ) {
+        throw new Error("回复的评论不存在");
+      }
+      const now = new Date().toISOString();
+      const comment = {
+        id: makeId("comment"),
+        work_id: workId,
+        user_id: current.profile.id,
+        parent_id: parentId,
+        content: requireText(content, "评论", 2000),
+        is_deleted: false,
+        created_at: now,
+        updated_at: now,
+      };
+      state.comments.push(comment);
+      return enrichComment(comment);
+    },
+
+    async deleteComment(commentId) {
+      const current = requireSession();
+      const comment = state.comments.find((item) => item.id === commentId);
+      if (!comment) throw new Error("评论不存在");
+      if (comment.user_id !== current.profile.id && !isAdmin()) {
+        throw new Error("没有权限删除这条评论");
+      }
+      comment.is_deleted = true;
+      comment.content = "";
+      comment.updated_at = new Date().toISOString();
+      return enrichComment(comment);
+    },
+
+    async getProfile(profileId) {
+      const profile = getProfileRecord(profileId);
+      if (!profile) throw new Error("作者不存在");
+      const works = state.works
+        .filter(
+          (work) =>
+            work.author_id === profileId && work.status === "published",
+        )
+        .map(enrichWork);
+      return {
+        ...clone(profile),
+        works,
+        work_count: works.length,
+        total_likes: works.reduce(
+          (total, work) => total + work.like_count,
+          0,
+        ),
+        comment_count: state.comments.filter(
+          (comment) => comment.user_id === profileId,
+        ).length,
+      };
+    },
+
+    async updateProfile(profileId, input) {
+      const current = requireSession();
+      if (current.profile.id !== profileId && !isAdmin()) {
+        throw new Error("没有权限修改该资料");
+      }
+      const profile = getProfileRecord(profileId);
+      if (!profile) throw new Error("作者不存在");
+      profile.pen_name = requireText(input.pen_name, "笔名", 24);
+      profile.bio = String(input.bio ?? "").trim().slice(0, 240);
+      profile.updated_at = new Date().toISOString();
+      if (current.profile.id === profileId) {
+        session.profile = clone(profile);
+      }
+      return clone(profile);
+    },
+
+    async getSiteSettings() {
+      return clone(state.siteSettings);
+    },
+
+    async setFeatured(workId, featured) {
+      requireSession();
+      if (!isAdmin()) throw new Error("只有管理员可以设置编辑推荐");
+      const work = state.works.find((item) => item.id === workId);
+      if (!work) throw new Error("作品不存在");
+      work.is_featured = Boolean(featured);
+      work.updated_at = new Date().toISOString();
+      return enrichWork(work);
+    },
+  };
+
+  return service;
+}
+
+function createSupabaseService(config) {
+  let clientPromise;
+  let cachedSession = null;
+
+  const getClient = async () => {
+    if (!clientPromise) {
+      clientPromise = import(SUPABASE_MODULE_URL).then(({ createClient }) =>
+        createClient(config.supabaseUrl, config.supabaseAnonKey),
+      );
+    }
+    return clientPromise;
+  };
+
+  const getCurrentProfile = async (client, userId) => {
+    const { data, error } = await client
+      .from("profiles")
+      .select("*")
+      .eq("id", userId)
+      .single();
+    if (error) throw new Error(error.message);
+    return data;
+  };
+
+  const requireRemoteSession = async () => {
+    const current = await service.getSession();
+    if (!current) throw new Error("请先登录");
+    return current;
+  };
+
+  const enrichRemoteWorks = async (client, works) => {
+    const sessionValue = await service.getSession();
+    const ids = works.map((work) => work.id);
+    if (!ids.length) return [];
+    const [{ data: likes, error: likeError }, { data: comments, error: commentError }] =
+      await Promise.all([
+        client.from("likes").select("work_id,user_id").in("work_id", ids),
+        client.from("comments").select("id,work_id").in("work_id", ids),
+      ]);
+    if (likeError) throw new Error(likeError.message);
+    if (commentError) throw new Error(commentError.message);
+    return works.map((work) => ({
+      ...work,
+      author_pen_name: work.profiles?.pen_name ?? "佚名",
+      author_bio: work.profiles?.bio ?? "",
+      author_role: work.profiles?.role ?? "member",
+      like_count: likes.filter((like) => like.work_id === work.id).length,
+      comment_count: comments.filter((comment) => comment.work_id === work.id)
+        .length,
+      liked_by_current_user: Boolean(
+        sessionValue &&
+          likes.some(
+            (like) =>
+              like.work_id === work.id &&
+              like.user_id === sessionValue.profile.id,
+          ),
+      ),
+    }));
+  };
+
+  const service = {
+    mode: "supabase",
+    isDemo: false,
+
+    async getSession() {
+      const client = await getClient();
+      const { data, error } = await client.auth.getSession();
+      if (error) throw new Error(error.message);
+      const user = data.session?.user;
+      if (!user) {
+        cachedSession = null;
+        return null;
+      }
+      if (!cachedSession || cachedSession.user.id !== user.id) {
+        cachedSession = {
+          user,
+          profile: await getCurrentProfile(client, user.id),
+        };
+      }
+      return clone(cachedSession);
+    },
+
+    async signIn({ studentNumber, password }) {
+      const client = await getClient();
+      const { data, error } = await client.auth.signInWithPassword({
+        email: studentNumberToAuthEmail(studentNumber),
+        password,
+      });
+      if (error) throw new Error(error.message);
+      cachedSession = {
+        user: data.user,
+        profile: await getCurrentProfile(client, data.user.id),
+      };
+      return clone(cachedSession);
+    },
+
+    async signUp({ studentNumber, password, penName }) {
+      if (!validatePassword(password)) {
+        throw new Error("密码至少八位，且需要同时包含字母和数字");
+      }
+      const client = await getClient();
+      const { data, error } = await client.auth.signUp({
+        email: studentNumberToAuthEmail(studentNumber),
+        password,
+        options: { data: { pen_name: requireText(penName, "笔名", 24) } },
+      });
+      if (error) throw new Error(error.message);
+      if (!data.session) {
+        throw new Error("注册已提交，请先在 Supabase 关闭邮件确认后再登录");
+      }
+      cachedSession = {
+        user: data.user,
+        profile: await getCurrentProfile(client, data.user.id),
+      };
+      return clone(cachedSession);
+    },
+
+    async signOut() {
+      const client = await getClient();
+      const { error } = await client.auth.signOut();
+      if (error) throw new Error(error.message);
+      cachedSession = null;
+    },
+
+    async listWorks() {
+      const client = await getClient();
+      const { data, error } = await client
+        .from("works")
+        .select("*, profiles!works_author_id_fkey(pen_name,bio,role)")
+        .eq("status", "published")
+        .order("created_at", { ascending: false });
+      if (error) throw new Error(error.message);
+      return enrichRemoteWorks(client, data ?? []);
+    },
+
+    async getWork(workId) {
+      const client = await getClient();
+      const { data: work, error } = await client
+        .from("works")
+        .select("*, profiles!works_author_id_fkey(id,pen_name,bio,role,created_at)")
+        .eq("id", workId)
+        .eq("status", "published")
+        .single();
+      if (error) throw new Error(error.code === "PGRST116" ? "作品不存在" : error.message);
+      const [enriched] = await enrichRemoteWorks(client, [work]);
+      const { data: comments, error: commentsError } = await client
+        .from("comments")
+        .select("*, profiles!comments_user_id_fkey(pen_name,role)")
+        .eq("work_id", workId)
+        .order("created_at", { ascending: true });
+      if (commentsError) throw new Error(commentsError.message);
+      return {
+        ...enriched,
+        author_profile: work.profiles,
+        comments: (comments ?? []).map((comment) => ({
+          ...comment,
+          user_pen_name: comment.profiles?.pen_name ?? "佚名",
+          user_role: comment.profiles?.role ?? "member",
+        })),
+      };
+    },
+
+    async createWork(input) {
+      const current = await requireRemoteSession();
+      const content = requireText(input.content, "正文", 50000);
+      const client = await getClient();
+      const { data, error } = await client
+        .from("works")
+        .insert({
+          author_id: current.profile.id,
+          title: requireText(input.title, "标题", 80),
+          excerpt:
+            String(input.excerpt ?? "").trim() || createExcerpt(content, 96),
+          content,
+          category: requireText(input.category, "分类", 12),
+        })
+        .select("*, profiles!works_author_id_fkey(pen_name,bio,role)")
+        .single();
+      if (error) throw new Error(error.message);
+      const [work] = await enrichRemoteWorks(client, [data]);
+      return work;
+    },
+
+    async deleteWork(workId) {
+      await requireRemoteSession();
+      const client = await getClient();
+      const { error } = await client.from("works").delete().eq("id", workId);
+      if (error) throw new Error(error.message);
+    },
+
+    async toggleLike(workId) {
+      const current = await requireRemoteSession();
+      const client = await getClient();
+      const { data: existing, error: findError } = await client
+        .from("likes")
+        .select("work_id")
+        .eq("work_id", workId)
+        .eq("user_id", current.profile.id)
+        .maybeSingle();
+      if (findError) throw new Error(findError.message);
+      let liked;
+      if (existing) {
+        const { error } = await client
+          .from("likes")
+          .delete()
+          .eq("work_id", workId)
+          .eq("user_id", current.profile.id);
+        if (error) throw new Error(error.message);
+        liked = false;
+      } else {
+        const { error } = await client
+          .from("likes")
+          .insert({ work_id: workId, user_id: current.profile.id });
+        if (error) throw new Error(error.message);
+        liked = true;
+      }
+      const { count, error: countError } = await client
+        .from("likes")
+        .select("*", { count: "exact", head: true })
+        .eq("work_id", workId);
+      if (countError) throw new Error(countError.message);
+      return { liked, likeCount: count ?? 0 };
+    },
+
+    async addComment(workId, content, parentId = null) {
+      const current = await requireRemoteSession();
+      const client = await getClient();
+      const { data, error } = await client
+        .from("comments")
+        .insert({
+          work_id: workId,
+          user_id: current.profile.id,
+          parent_id: parentId,
+          content: requireText(content, "评论", 2000),
+        })
+        .select("*")
+        .single();
+      if (error) throw new Error(error.message);
+      return {
+        ...data,
+        user_pen_name: current.profile.pen_name,
+        user_role: current.profile.role,
+      };
+    },
+
+    async deleteComment(commentId) {
+      await requireRemoteSession();
+      const client = await getClient();
+      const { data, error } = await client.rpc("soft_delete_comment", {
+        target_comment_id: commentId,
+      });
+      if (error) throw new Error(error.message);
+      return data;
+    },
+
+    async getProfile(profileId) {
+      const client = await getClient();
+      const { data: profile, error } = await client
+        .from("profiles")
+        .select("*")
+        .eq("id", profileId)
+        .single();
+      if (error) throw new Error(error.code === "PGRST116" ? "作者不存在" : error.message);
+      const works = (await service.listWorks()).filter(
+        (work) => work.author_id === profileId,
+      );
+      const { count, error: commentError } = await client
+        .from("comments")
+        .select("*", { count: "exact", head: true })
+        .eq("user_id", profileId);
+      if (commentError) throw new Error(commentError.message);
+      return {
+        ...profile,
+        works,
+        work_count: works.length,
+        total_likes: works.reduce(
+          (total, work) => total + work.like_count,
+          0,
+        ),
+        comment_count: count ?? 0,
+      };
+    },
+
+    async updateProfile(profileId, input) {
+      const current = await requireRemoteSession();
+      if (current.profile.id !== profileId) {
+        throw new Error("没有权限修改该资料");
+      }
+      const client = await getClient();
+      const { data, error } = await client
+        .from("profiles")
+        .update({
+          pen_name: requireText(input.pen_name, "笔名", 24),
+          bio: String(input.bio ?? "").trim().slice(0, 240),
+        })
+        .eq("id", profileId)
+        .select("*")
+        .single();
+      if (error) throw new Error(error.message);
+      cachedSession.profile = data;
+      return data;
+    },
+
+    async getSiteSettings() {
+      const client = await getClient();
+      const { data, error } = await client
+        .from("site_settings")
+        .select("key,value");
+      if (error) throw new Error(error.message);
+      return Object.fromEntries((data ?? []).map((item) => [item.key, item.value]));
+    },
+
+    async setFeatured(workId, featured) {
+      await requireRemoteSession();
+      const client = await getClient();
+      const { data, error } = await client
+        .from("works")
+        .update({ is_featured: Boolean(featured) })
+        .eq("id", workId)
+        .select("*, profiles!works_author_id_fkey(pen_name,bio,role)")
+        .single();
+      if (error) throw new Error(error.message);
+      const [work] = await enrichRemoteWorks(client, [data]);
+      return work;
+    },
+  };
+
+  return service;
+}
+
+export function createDataService(config = {}) {
+  const hasRemoteConfig =
+    config.mode === "supabase" &&
+    Boolean(config.supabaseUrl) &&
+    Boolean(config.supabaseAnonKey);
+  return hasRemoteConfig
+    ? createSupabaseService(config)
+    : createDemoService();
+}
