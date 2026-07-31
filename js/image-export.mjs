@@ -233,52 +233,48 @@ async function renderPageBlob(page, wordmarkDataUrl, doc, win) {
   });
 }
 
-async function triggerDownload(file, doc, win) {
-  const url = win.URL.createObjectURL(file);
+export function canShareExportFiles(
+  files,
+  navigatorRef = globalThis.navigator,
+) {
+  if (!navigatorRef?.share || !navigatorRef?.canShare) return false;
   try {
-    const anchor = doc.createElement("a");
-    anchor.href = url;
-    anchor.download = file.name;
-    anchor.hidden = true;
-    doc.body.append(anchor);
-    anchor.click();
-    await Promise.resolve();
-    anchor.remove();
-  } finally {
-    win.URL.revokeObjectURL(url);
+    return navigatorRef.canShare({ files });
+  } catch {
+    return false;
   }
 }
 
-function showSavePanel(files, container, doc, win) {
-  container.querySelector(".export-results")?.remove();
-  const panel = doc.createElement("section");
-  panel.className = "export-results";
-  panel.setAttribute("aria-label", "逐页保存作品图片");
+export function shareExportFiles(
+  files,
+  work,
+  navigatorRef = globalThis.navigator,
+) {
+  if (!navigatorRef?.share) throw new Error("当前浏览器不支持文件分享");
+  return navigatorRef.share({ files, title: work?.title });
+}
 
-  const heading = doc.createElement("h3");
-  heading.textContent = "图片已经生成";
-  const explanation = doc.createElement("p");
-  explanation.textContent = "若浏览器拦截了连续下载，请逐页保存：";
-  const actions = doc.createElement("div");
-  actions.className = "export-result-actions";
-
-  files.forEach((file, index) => {
-    const button = doc.createElement("button");
-    button.className = "secondary-button";
-    button.type = "button";
-    button.textContent = `保存第 ${index + 1} 页`;
-    button.addEventListener("click", () => triggerDownload(file, doc, win));
-    actions.append(button);
-  });
-
-  panel.append(heading, explanation, actions);
-  container.append(panel);
+export function downloadExportFile(file, options = {}) {
+  const documentRef = options.documentRef ?? globalThis.document;
+  const urlApi = options.urlApi ?? globalThis.URL;
+  const url = urlApi.createObjectURL(file);
+  let anchor = null;
+  try {
+    anchor = documentRef.createElement("a");
+    anchor.href = url;
+    anchor.download = file.name;
+    anchor.hidden = true;
+    documentRef.body.append(anchor);
+    anchor.click();
+  } finally {
+    anchor?.remove();
+    urlApi.revokeObjectURL(url);
+  }
 }
 
 export async function exportWorkImages(work, options = {}) {
   const doc = options.document ?? globalThis.document;
   const win = doc?.defaultView ?? globalThis.window;
-  const nav = options.navigator ?? win?.navigator;
   if (!doc?.body || !win) throw new Error("当前环境无法生成作品图片");
 
   const root = doc.createElement("div");
@@ -339,21 +335,7 @@ export async function exportWorkImages(work, options = {}) {
         ),
     );
 
-    if (nav?.share && nav?.canShare?.({ files })) {
-      try {
-        await nav.share({ files, title: work.title });
-        return { blobs, shared: true };
-      } catch (error) {
-        if (error?.name === "AbortError") {
-          return { blobs, shared: false, canceled: true };
-        }
-      }
-    }
-
-    const resultsContainer = options.resultsContainer ?? doc.body;
-    if (files.length > 1) showSavePanel(files, resultsContainer, doc, win);
-    for (const file of files) await triggerDownload(file, doc, win);
-    return { blobs, shared: false };
+    return { blobs, files, shared: false };
   } finally {
     root.remove();
   }

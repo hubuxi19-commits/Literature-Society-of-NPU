@@ -1,6 +1,11 @@
 import { config } from "./config.mjs";
 import { createDataService } from "./data-service.mjs";
-import { exportWorkImages } from "./image-export.mjs";
+import {
+  canShareExportFiles,
+  downloadExportFile,
+  exportWorkImages,
+  shareExportFiles,
+} from "./image-export.mjs";
 import {
   createMobileFeedController,
   resolveHorizontalSwipe,
@@ -41,6 +46,7 @@ const state = {
   settings: null,
   discussions: [],
   currentWork: null,
+  currentExport: null,
   filters: {
     query: "",
     category: "全部",
@@ -596,6 +602,66 @@ function renderDesktopHome() {
   replaceContent(app, shell);
 }
 
+function getPreparedExport(trigger) {
+  const prepared = state.currentExport;
+  if (!prepared || prepared.workId !== trigger.dataset.workId) {
+    showToast("已生成的图片已经失效，请重新生成。");
+    return null;
+  }
+  return prepared;
+}
+
+function renderExportActions(prepared, container) {
+  const panel = element("section", {
+    className: "export-results",
+    attrs: { "aria-label": "分享或保存作品图片" },
+  });
+  panel.append(
+    element("h3", { text: `图片已经生成 · ${prepared.files.length} 页` }),
+    element("p", { text: "请点击下方按钮分享或保存图片。" }),
+  );
+
+  const actions = element("div", { className: "export-result-actions" });
+  if (canShareExportFiles(prepared.files)) {
+    actions.append(
+      element("button", {
+        className: "primary-button",
+        type: "button",
+        text: "分享作品图片",
+        dataset: { action: "share-export", workId: prepared.workId },
+      }),
+    );
+  }
+  actions.append(
+    element("button", {
+      className: "secondary-button",
+      type: "button",
+      text: prepared.files.length > 1 ? "保存全部图片" : "保存图片",
+      dataset: { action: "save-export", workId: prepared.workId },
+    }),
+  );
+
+  if (prepared.files.length > 1) {
+    prepared.files.forEach((file, pageIndex) => {
+      actions.append(
+        element("button", {
+          className: "secondary-button",
+          type: "button",
+          text: `保存第 ${pageIndex + 1} 页`,
+          dataset: {
+            action: "save-export-page",
+            workId: prepared.workId,
+            pageIndex,
+          },
+        }),
+      );
+    });
+  }
+
+  panel.append(actions);
+  container.replaceChildren(panel);
+}
+
 function buildMobileFeedSignature(works) {
   return JSON.stringify([
     state.filters.category,
@@ -981,6 +1047,7 @@ function createCommentItem(comment, workId, depth = 0) {
 async function renderWork(workId) {
   showLoading("正在展开作品");
   state.currentWork = null;
+  state.currentExport = null;
   try {
     const work = await service.getWork(workId);
     state.currentWork = work;
@@ -1771,26 +1838,75 @@ document.addEventListener("click", async (event) => {
     trigger.textContent = "正在生成…";
     const resultsContainer = document.querySelector(".export-results-host");
     resultsContainer?.replaceChildren();
+    state.currentExport = null;
 
     try {
-      const result = await exportWorkImages(work, { resultsContainer });
-      if (result.canceled) {
-        showToast("已取消分享。");
-      } else if (result.shared) {
-        showToast("作品图片已交给系统分享。", "success");
-      } else if (result.blobs.length > 1) {
-        showToast(
-          `已生成 ${result.blobs.length} 页；若下载被拦截，可在下方逐页保存。`,
-          "success",
-        );
-      } else {
-        showToast("作品图片已生成并开始保存。", "success");
-      }
+      const result = await exportWorkImages(work);
+      const prepared = {
+        work,
+        workId: String(work.id),
+        blobs: result.blobs,
+        files: result.files,
+      };
+      state.currentExport = prepared;
+      renderExportActions(prepared, resultsContainer);
+      showToast(
+        `已生成 ${result.blobs.length} 页，请点击分享或保存。`,
+        "success",
+      );
     } catch (error) {
       showToast(`作品图片没有生成：${error.message}`);
     } finally {
       trigger.disabled = false;
       trigger.textContent = originalText;
+    }
+  } else if (action === "share-export") {
+    const prepared = getPreparedExport(trigger);
+    if (!prepared) return;
+    const originalText = trigger.textContent;
+    trigger.disabled = true;
+    trigger.textContent = "正在分享…";
+    try {
+      const shareOperation = shareExportFiles(prepared.files, prepared.work);
+      Promise.resolve(shareOperation)
+        .then(() => showToast("作品图片已交给系统分享。", "success"))
+        .catch((error) => {
+          if (error?.name !== "AbortError") {
+            showToast(`作品图片没有分享：${error.message}`);
+          }
+        })
+        .finally(() => {
+          trigger.disabled = false;
+          trigger.textContent = originalText;
+        });
+    } catch (error) {
+      trigger.disabled = false;
+      trigger.textContent = originalText;
+      showToast(`作品图片没有分享：${error.message}`);
+    }
+  } else if (action === "save-export") {
+    const prepared = getPreparedExport(trigger);
+    if (!prepared) return;
+    try {
+      prepared.files.forEach((file) => downloadExportFile(file));
+      showToast("已开始保存作品图片。", "success");
+    } catch (error) {
+      showToast(`作品图片没有保存：${error.message}`);
+    }
+  } else if (action === "save-export-page") {
+    const prepared = getPreparedExport(trigger);
+    if (!prepared) return;
+    const pageIndex = Number(trigger.dataset.pageIndex);
+    const file = prepared.files[pageIndex];
+    if (!file) {
+      showToast("这一页图片已经失效，请重新生成。");
+      return;
+    }
+    try {
+      downloadExportFile(file);
+      showToast(`已开始保存第 ${pageIndex + 1} 页。`, "success");
+    } catch (error) {
+      showToast(`第 ${pageIndex + 1} 页没有保存：${error.message}`);
     }
   } else if (action === "toggle-reply") {
     const form = document.querySelector(

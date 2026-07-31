@@ -124,9 +124,22 @@ test("阅读页通过本地素笺模板生成 1080×1920 PNG", async () => {
 
   assert.match(app, /data(?:set)?:\s*\{\s*action:\s*"export-work"/);
   assert.match(app, /text:\s*"生成作品图片"/);
+  assert.match(app, /currentExport:\s*null/);
+  assert.match(app, /action:\s*"share-export"/);
+  assert.match(app, /action:\s*"save-export"/);
+  assert.match(app, /action:\s*"save-export-page"/);
+  assert.match(
+    app,
+    /const\s+shareOperation\s*=\s*shareExportFiles\([^;]+\);\s*Promise\.resolve\(shareOperation\)/s,
+  );
   assert.match(exporter, /student-literature-society-wordmark\.png/);
   assert.match(exporter, /canvas\.toBlob\(/);
-  assert.match(exporter, /`保存第 \$\{index \+ 1\} 页`/);
+  assert.match(app, /`保存第 \$\{pageIndex \+ 1\} 页`/);
+  const exportWorkBody = exporter.match(
+    /export\s+async\s+function\s+exportWorkImages[\s\S]+?\n}\n/,
+  )?.[0] ?? "";
+  assert.doesNotMatch(exportWorkBody, /\.share\s*\(/);
+  assert.doesNotMatch(exportWorkBody, /\.click\s*\(/);
   assert.match(css, /\.export-page[\s\S]*?width:\s*1080px/);
   assert.match(css, /\.export-page[\s\S]*?height:\s*1920px/);
   assert.match(css, /\.export-wordmark[\s\S]*?width:\s*30%/);

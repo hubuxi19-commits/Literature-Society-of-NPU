@@ -5,7 +5,9 @@ import {
   EXPORT_HEIGHT,
   EXPORT_WIDTH,
   buildExportFileName,
+  downloadExportFile,
   paginateExportUnits,
+  shareExportFiles,
   splitExportUnits,
 } from "../js/image-export.mjs";
 
@@ -81,4 +83,129 @@ test("多页文件名带两位页码并清除非法字符", () => {
 test("单页文件名不添加页码并折叠连续替换符", () => {
   const work = { title: " 风\\/:*?雨。 ", author_pen_name: " 松声 " };
   assert.equal(buildExportFileName(work, 0, 1), "风-雨。-松声.png");
+});
+
+test("分享函数在返回 Promise 前同步调用系统分享", () => {
+  const files = [{ name: "作品.png" }];
+  const shareResult = Promise.resolve();
+  let payload = null;
+  const navigatorRef = {
+    share(nextPayload) {
+      payload = nextPayload;
+      return shareResult;
+    },
+  };
+
+  const returned = shareExportFiles(files, { title: "作品" }, navigatorRef);
+
+  assert.deepEqual(payload, { files, title: "作品" });
+  assert.equal(returned, shareResult);
+});
+
+test("保存函数在当前调用栈点击下载并清理临时资源", () => {
+  const events = [];
+  const anchor = {
+    click() {
+      events.push("click");
+    },
+    remove() {
+      events.push("remove");
+    },
+  };
+  const documentRef = {
+    createElement() {
+      return anchor;
+    },
+    body: {
+      append(node) {
+        assert.equal(node, anchor);
+        events.push("append");
+      },
+    },
+  };
+  const urlApi = {
+    createObjectURL() {
+      events.push("create-url");
+      return "blob:作品";
+    },
+    revokeObjectURL(url) {
+      assert.equal(url, "blob:作品");
+      events.push("revoke-url");
+    },
+  };
+
+  downloadExportFile({ name: "作品.png" }, { documentRef, urlApi });
+
+  assert.deepEqual(events, [
+    "create-url",
+    "append",
+    "click",
+    "remove",
+    "revoke-url",
+  ]);
+  assert.equal(anchor.download, "作品.png");
+});
+
+test("下载点击抛错时仍在 finally 移除锚点并撤销 URL", () => {
+  const events = [];
+  const anchor = {
+    click() {
+      events.push("click");
+      throw new Error("浏览器阻止下载");
+    },
+    remove() {
+      events.push("remove");
+    },
+  };
+  const documentRef = {
+    createElement() {
+      return anchor;
+    },
+    body: { append() {} },
+  };
+  const urlApi = {
+    createObjectURL() {
+      return "blob:作品";
+    },
+    revokeObjectURL() {
+      events.push("revoke-url");
+    },
+  };
+
+  assert.throws(
+    () =>
+      downloadExportFile(
+        { name: "作品.png" },
+        { documentRef, urlApi },
+      ),
+    /浏览器阻止下载/,
+  );
+  assert.deepEqual(events, ["click", "remove", "revoke-url"]);
+});
+
+test("锚点创建失败时仍撤销已经创建的 URL", () => {
+  const events = [];
+  const documentRef = {
+    createElement() {
+      throw new Error("无法创建锚点");
+    },
+  };
+  const urlApi = {
+    createObjectURL() {
+      return "blob:作品";
+    },
+    revokeObjectURL() {
+      events.push("revoke-url");
+    },
+  };
+
+  assert.throws(
+    () =>
+      downloadExportFile(
+        { name: "作品.png" },
+        { documentRef, urlApi },
+      ),
+    /无法创建锚点/,
+  );
+  assert.deepEqual(events, ["revoke-url"]);
 });
