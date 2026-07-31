@@ -85,6 +85,10 @@ test("生产迁移先转换旧诗歌再添加目标约束", async () => {
     migration,
     /update public\.works\s+set category = '新诗'\s+where category = '诗歌'/i,
   );
+  assert.match(
+    migration,
+    /revoke update\s*\(\s*pen_name,\s*bio,\s*updated_at\s*\)\s*on table public\.profiles from authenticated/i,
+  );
   assert.match(migration, /begin;/i);
   assert.match(migration, /commit;/i);
 });
