@@ -1,6 +1,22 @@
 const STUDENT_NUMBER_PATTERN = /^20\d{8}$/;
 const AUTH_EMAIL_DOMAIN = "accounts.wenyuan.invalid";
 
+export const CATEGORIES = Object.freeze([
+  "全部", "新诗", "旧诗", "散文", "小说", "随笔", "其他",
+]);
+
+export const PUBLISHABLE_CATEGORIES = Object.freeze(CATEGORIES.slice(1));
+
+export function normalizeCategory(value) {
+  const category = String(value ?? "").trim();
+  if (category === "诗歌") return "新诗";
+  return PUBLISHABLE_CATEGORIES.includes(category) ? category : "其他";
+}
+
+export function isPoetryCategory(value) {
+  return ["诗歌", "新诗", "旧诗"].includes(String(value ?? "").trim());
+}
+
 export function validateStudentNumber(value) {
   return STUDENT_NUMBER_PATTERN.test(String(value ?? "").trim());
 }
@@ -104,7 +120,7 @@ export function filterAndSortWorks(works = [], filters = {}) {
 
   const filtered = works.filter((work) => {
     const categoryMatches =
-      category === "全部" || String(work.category) === category;
+      category === "全部" || normalizeCategory(work.category) === category;
     const haystack = [
       work.title,
       work.excerpt,

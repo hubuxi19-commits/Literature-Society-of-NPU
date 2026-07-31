@@ -15,9 +15,17 @@ test("演示成员可以登录、发布、点赞、回复和删除自己的内�
     title: "新作",
     excerpt: "摘要",
     content: "正文",
-    category: "诗歌",
+    category: "新诗",
   });
   assert.equal(work.author_id, session.profile.id);
+
+  const classicalWork = await service.createWork({
+    title: "旧体新作",
+    excerpt: "摘要",
+    content: "正文",
+    category: "旧诗",
+  });
+  assert.equal(classicalWork.category, "旧诗");
 
   const liked = await service.toggleLike(work.id);
   assert.equal(liked.liked, true);

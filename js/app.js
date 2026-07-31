@@ -2,11 +2,14 @@ import { config } from "./config.mjs";
 import { createDataService } from "./data-service.mjs";
 import {
   buildCommentTree,
+  CATEGORIES,
   countChineseText,
   createExcerpt,
   filterAndSortWorks,
   formatDate,
+  isPoetryCategory,
   parseRoute,
+  PUBLISHABLE_CATEGORIES,
   validatePassword,
   validateStudentNumber,
 } from "./utils.mjs";
@@ -23,7 +26,6 @@ const profileLink = document.querySelector("#profileLink");
 const demoRibbon = document.querySelector("#demoRibbon");
 const toast = document.querySelector("#toast");
 
-const CATEGORIES = ["全部", "诗歌", "散文", "小说", "随笔", "其他"];
 const DRAFT_KEY = "wenyuan-writing-draft";
 
 const state = {
@@ -439,7 +441,7 @@ function renderCommunityRail() {
 
   const submission = state.settings?.submission ?? {
     title: "长期征稿",
-    body: "诗歌、散文、小说、随笔与其他文字均可投稿。",
+    body: "新诗、旧诗、散文、小说、随笔与其他文字均可投稿。",
   };
   const note = element("section", { className: "submission-note" }, [
     element("p", { className: "eyebrow", text: "OPEN CALL" }),
@@ -591,7 +593,7 @@ function createPageHeader(eyebrow, title, description) {
 }
 
 function renderParagraphs(content, category) {
-  const isPoetry = category === "诗歌";
+  const isPoetry = isPoetryCategory(category);
   const body = element("article", {
     className: `reading-body ${
       isPoetry ? "reading-body--poetry" : "reading-body--prose"
@@ -962,12 +964,12 @@ function renderWrite() {
     name: "category",
     attrs: { required: true },
   });
-  CATEGORIES.filter((category) => category !== "全部").forEach((category) => {
+  PUBLISHABLE_CATEGORIES.forEach((category) => {
     select.append(
       element("option", {
         value: category,
         text: category,
-        attrs: { selected: (draft.category ?? "诗歌") === category },
+        attrs: { selected: (draft.category ?? "新诗") === category },
       }),
     );
   });
@@ -1210,7 +1212,7 @@ function renderSubmissions() {
   const shell = element("div", { className: "page-shell" });
   const submission = state.settings?.submission ?? {
     title: "长期征稿",
-    body: "诗歌、散文、小说、随笔与其他文字均可投稿。",
+    body: "新诗、旧诗、散文、小说、随笔与其他文字均可投稿。",
   };
   shell.append(
     createPageHeader(
@@ -1224,7 +1226,7 @@ function renderSubmissions() {
     element("p", { className: "eyebrow", text: "WHAT TO SHARE" }),
     element("h2", { text: "可以发表什么" }),
     element("p", {
-      text: "平台长期接收原创诗歌、散文、小说、随笔以及暂时难以归类的文字。作品发布后会立即进入新作流，不必等待集中刊发。",
+      text: "平台长期接收原创的新诗、旧诗、散文、小说、随笔与其他文字。作品发布后会立即进入新作流，不必等待集中刊发。",
     }),
     element("ul", {}, [
       element("li", { text: "作品应为本人原创。" }),

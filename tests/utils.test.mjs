@@ -11,7 +11,30 @@ import {
   parseRoute,
   filterAndSortWorks,
   escapeText,
+  CATEGORIES,
+  PUBLISHABLE_CATEGORIES,
+  normalizeCategory,
+  isPoetryCategory,
 } from "../js/utils.mjs";
+
+test("分类拆分为新诗和旧诗且投稿不显示旧诗歌分类", () => {
+  assert.deepEqual(CATEGORIES, [
+    "全部", "新诗", "旧诗", "散文", "小说", "随笔", "其他",
+  ]);
+  assert.deepEqual(PUBLISHABLE_CATEGORIES, [
+    "新诗", "旧诗", "散文", "小说", "随笔", "其他",
+  ]);
+  assert.equal(CATEGORIES.includes("诗歌"), false);
+});
+
+test("旧诗歌数据兼容映射为新诗且两类诗都使用诗歌排版", () => {
+  assert.equal(normalizeCategory("诗歌"), "新诗");
+  assert.equal(normalizeCategory("旧诗"), "旧诗");
+  assert.equal(isPoetryCategory("诗歌"), true);
+  assert.equal(isPoetryCategory("新诗"), true);
+  assert.equal(isPoetryCategory("旧诗"), true);
+  assert.equal(isPoetryCategory("散文"), false);
+});
 
 test("学号必须是 20 开头的十位数字", () => {
   assert.equal(validateStudentNumber("2023123456"), true);
@@ -115,7 +138,7 @@ test("作品按关键词、分类和热度过滤排序且不修改输入", () =>
   assert.deepEqual(
     filterAndSortWorks(works, {
       query: "",
-      category: "诗歌",
+      category: "新诗",
       sort: "discussions",
     }).map((item) => item.id),
     ["1"],
