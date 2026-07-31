@@ -385,8 +385,6 @@ async function desktopFlow(browser, browserMessages) {
       throw new Error(`第 ${index + 1} 页预览图片尺寸错误`);
     }
   });
-  const exportPreviewScreenshot = await exportPanel.screenshot();
-
   const generationProbe = await page.evaluate(() => ({
     anchorClicks: window.__exportProbe.anchorClicks,
     createdUrls: [...window.__exportProbe.createdUrls],
@@ -529,7 +527,7 @@ async function desktopFlow(browser, browserMessages) {
   await expectVisible(page.getByRole("button", { name: "删除作品" }), "管理员删除入口");
 
   await context.close();
-  return { homeScreenshot, readingScreenshot, exportPreviewScreenshot };
+  return { homeScreenshot, readingScreenshot };
 }
 
 async function mobileFlow(browser, browserMessages) {
@@ -664,6 +662,24 @@ async function mobileFlow(browser, browserMessages) {
     throw new Error("touchcancel 后仍错误切换了作品");
   }
 
+  await dispatchTouchSwipe(mobileCard, 320, 210);
+  await page.waitForFunction(
+    (workId) =>
+      document.querySelector("[data-mobile-work-card]")?.dataset.workId !== workId,
+    firstWorkId,
+  );
+  const workAfterSwipeWithoutClick = await mobileCard.getAttribute("data-work-id");
+  await mobileCard.locator(".mobile-work-copy").tap();
+  await page.waitForURL(
+    new RegExp(`#\\/works\\/${workAfterSwipeWithoutClick}$`),
+  );
+  await page.goBack();
+  await page.waitForURL(/#\/$|\/$/);
+  await expectVisible(
+    page.locator("[data-mobile-work-card]"),
+    "无合成点击滑动后的返回首页",
+  );
+
   await categoryButtons.filter({ hasText: /^散文$/ }).click();
   await page.waitForFunction(
     () =>
@@ -775,12 +791,66 @@ async function mobileFlow(browser, browserMessages) {
   return { homeScreenshot, readingScreenshot };
 }
 
+async function mobileProfileAuthFlow(browser, browserMessages) {
+  const context = await browser.newContext({
+    viewport: { width: 390, height: 844 },
+    deviceScaleFactor: 1,
+    hasTouch: true,
+  });
+  const page = await context.newPage();
+  await useDemoConfig(page);
+  page.setDefaultTimeout(8000);
+  page.on("console", (message) => {
+    if (message.type() === "error") {
+      browserMessages.push(`profile auth console: ${message.text()}`);
+    }
+  });
+  page.on("pageerror", (error) => {
+    browserMessages.push(`profile auth pageerror: ${error.message}`);
+  });
+
+  await page.goto(baseUrl);
+  await page.waitForLoadState("networkidle");
+  const profileDestination = page
+    .getByRole("navigation", { name: "移动端主要导航" })
+    .getByRole("link", { name: "我的", exact: true });
+  await profileDestination.click();
+  await expectVisible(page.locator("#authDialog"), "我的登录窗口");
+  await page.locator('#loginForm [name="studentNumber"]').fill("2023123456");
+  await page.locator('#loginForm [name="password"]').fill("wenyuan88");
+  await page.getByRole("button", { name: "登录并继续" }).click();
+  await page.waitForURL(/#\/authors\/profile-pine$/);
+  await page.getByRole("heading", { name: "松声", exact: true }).waitFor();
+  await page.locator("#toast").waitFor({ state: "hidden" });
+
+  const loggedInProfileHref = await profileDestination.getAttribute("href");
+  if (new URL(loggedInProfileHref).hash !== "#/authors/profile-pine") {
+    throw new Error(
+      `登录后移动端“我的”没有指向当前用户主页：${loggedInProfileHref}`,
+    );
+  }
+
+  await page
+    .getByRole("navigation", { name: "移动端主要导航" })
+    .getByRole("link", { name: "翻阅", exact: true })
+    .click();
+  await page.getByRole("heading", { name: "让作品被读见" }).waitFor();
+  await profileDestination.click();
+  await page.waitForURL(/#\/authors\/profile-pine$/);
+  if (await page.locator("#authDialog").evaluate((dialog) => dialog.open)) {
+    throw new Error("已登录用户点击“我的”时仍打开登录窗口");
+  }
+
+  await context.close();
+}
+
 (async () => {
   const browserMessages = [];
   const browser = await chromium.launch({ headless: true });
   try {
     const desktopScreenshots = await desktopFlow(browser, browserMessages);
     const mobileScreenshots = await mobileFlow(browser, browserMessages);
+    await mobileProfileAuthFlow(browser, browserMessages);
     if (browserMessages.length) {
       throw new Error(`浏览器控制台出现错误：\n${browserMessages.join("\n")}`);
     }
@@ -800,10 +870,6 @@ async function mobileFlow(browser, browserMessages) {
     writeFileSync(
       path.join(screenshots, "mobile-reading.png"),
       mobileScreenshots.readingScreenshot,
-    );
-    writeFileSync(
-      path.join(screenshots, "export-preview.png"),
-      desktopScreenshots.exportPreviewScreenshot,
     );
     console.log("Browser checks passed: desktop and mobile flows verified.");
   } finally {

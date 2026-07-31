@@ -26,6 +26,18 @@ test("移动端底部导航使用四个已批准入口", async () => {
     ),
     ["翻阅", "讨论", "写作", "我的"],
   );
+  assert.match(navigation, /data-return-hash="__current-profile__"/);
+});
+
+test("登录返回目标可在会话建立后解析为当前用户主页", async () => {
+  const app = await readFile(new URL("../js/app.js", import.meta.url), "utf8");
+
+  assert.match(app, /PROFILE_RETURN_SENTINEL\s*=\s*"__current-profile__"/);
+  assert.match(app, /function\s+resolveAuthReturnHash\s*\(/);
+  assert.match(
+    app,
+    /resolveAuthReturnHash\(state\.authReturnHash\)/,
+  );
 });
 
 test("公开应用源码不包含完整学号的可见 HTML 文案", async () => {
@@ -108,9 +120,16 @@ test("移动首页使用独立队列、可访问卡片与被动触摸手势", as
   );
   assert.match(app, /resolveHorizontalSwipe\(/);
   assert.match(app, /mobileFeed\.suppressClick\s*=\s*true/);
+  assert.match(app, /SWIPE_CLICK_SUPPRESSION_MS/);
+  assert.match(app, /function\s+clearMobileFeedClickSuppression\s*\(/);
+  assert.match(app, /window\.setTimeout\([\s\S]*?SWIPE_CLICK_SUPPRESSION_MS/);
   assert.match(
     app,
-    /if\s*\(state\.mobileFeed\.suppressClick\)[\s\S]*?mobileFeed\.suppressClick\s*=\s*false/,
+    /if\s*\(state\.mobileFeed\.suppressClick\)[\s\S]*?clearMobileFeedClickSuppression\(\)/,
+  );
+  assert.match(
+    app,
+    /addEventListener\(\s*"touchstart"[\s\S]*?clearMobileFeedClickSuppression\(\)/,
   );
   assert.match(app, /controller\.isAtStart\(\)/);
   assert.match(app, /controller\.isAtEnd\(\)/);
@@ -194,4 +213,14 @@ test("README 只保留当前功能分支的权威快进发布顺序", async () =
     (readme.match(/git merge --ff-only codex\/mobile-feed-export/g) ?? []).length,
     1,
   );
+});
+
+test("浏览器检查保留预览断言但不写入内部导出预览截图", async () => {
+  const browserCheck = await readFile(
+    new URL("./browser-check.cjs", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(browserCheck, /\.export-preview-image/);
+  assert.doesNotMatch(browserCheck, /exportPreviewScreenshot|export-preview\.png/);
 });

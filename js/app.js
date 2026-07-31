@@ -39,6 +39,8 @@ const demoRibbon = document.querySelector("#demoRibbon");
 const toast = document.querySelector("#toast");
 
 const DRAFT_KEY = "wenyuan-writing-draft";
+const PROFILE_RETURN_SENTINEL = "__current-profile__";
+const SWIPE_CLICK_SUPPRESSION_MS = 2000;
 const mobileHomeMedia = window.matchMedia("(max-width: 760px)");
 
 const state = {
@@ -58,6 +60,7 @@ const state = {
     signature: "",
     touch: null,
     suppressClick: false,
+    suppressClickTimer: null,
   },
   confirmResolver: null,
   toastTimer: null,
@@ -164,7 +167,7 @@ function updateHeader() {
     accountMenu.hidden = true;
     mobileProfileLink.href = "#/";
     mobileProfileLink.dataset.action = "open-auth";
-    mobileProfileLink.dataset.returnHash = "#/";
+    mobileProfileLink.dataset.returnHash = PROFILE_RETURN_SENTINEL;
   }
 
   const route = parseRoute(window.location.hash);
@@ -616,6 +619,12 @@ function renderDesktopHome() {
   replaceContent(app, shell);
 }
 
+function resolveAuthReturnHash(returnTarget) {
+  if (returnTarget !== PROFILE_RETURN_SENTINEL) return returnTarget;
+  if (!state.session?.profile?.id) return null;
+  return `#/authors/${encodeURIComponent(state.session.profile.id)}`;
+}
+
 function getPreparedExport(trigger) {
   const prepared = state.currentExport;
   if (!prepared || prepared.workId !== trigger.dataset.workId) {
@@ -778,12 +787,29 @@ function moveMobileFeed(direction) {
   return true;
 }
 
+function clearMobileFeedClickSuppression() {
+  state.mobileFeed.suppressClick = false;
+  if (state.mobileFeed.suppressClickTimer != null) {
+    window.clearTimeout(state.mobileFeed.suppressClickTimer);
+    state.mobileFeed.suppressClickTimer = null;
+  }
+}
+
+function armMobileFeedClickSuppression() {
+  clearMobileFeedClickSuppression();
+  state.mobileFeed.suppressClick = true;
+  state.mobileFeed.suppressClickTimer = window.setTimeout(
+    clearMobileFeedClickSuppression,
+    SWIPE_CLICK_SUPPRESSION_MS,
+  );
+}
+
 function attachMobileFeedInteractions(card, work) {
   card.addEventListener("click", (event) => {
     if (state.mobileFeed.suppressClick) {
       event.preventDefault();
       event.stopPropagation();
-      state.mobileFeed.suppressClick = false;
+      clearMobileFeedClickSuppression();
       return;
     }
     if (
@@ -809,6 +835,7 @@ function attachMobileFeedInteractions(card, work) {
   card.addEventListener(
     "touchstart",
     (event) => {
+      clearMobileFeedClickSuppression();
       const touch = event.touches[0];
       if (!touch) return;
       state.mobileFeed.touch = {
@@ -843,7 +870,7 @@ function attachMobileFeedInteractions(card, work) {
       const deltaY = (touch?.clientY ?? gesture.endY) - gesture.startY;
       const direction = resolveHorizontalSwipe(deltaX, deltaY);
       if (!direction) return;
-      state.mobileFeed.suppressClick = true;
+      armMobileFeedClickSuppression();
       moveMobileFeed(direction);
     },
     { passive: true },
@@ -1842,7 +1869,7 @@ async function handleAuthSubmit(form, mode) {
       mode === "login" ? "已登录，欢迎回来。" : "账户已创建，可以开始写作。",
       "success",
     );
-    const returnHash = state.authReturnHash;
+    const returnHash = resolveAuthReturnHash(state.authReturnHash);
     state.authReturnHash = null;
     if (returnHash && window.location.hash !== returnHash) {
       window.location.hash = returnHash;
