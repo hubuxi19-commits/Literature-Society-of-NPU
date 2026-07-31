@@ -298,7 +298,6 @@ function createDemoService() {
       }
       const profile = getProfileRecord(profileId);
       if (!profile) throw new Error("作者不存在");
-      profile.pen_name = requireText(input.pen_name, "笔名", 24);
       profile.bio = String(input.bio ?? "").trim().slice(0, 240);
       profile.updated_at = new Date().toISOString();
       if (current.profile.id === profileId) {
@@ -616,7 +615,6 @@ function createSupabaseService(config) {
       const { data, error } = await client
         .from("profiles")
         .update({
-          pen_name: requireText(input.pen_name, "笔名", 24),
           bio: String(input.bio ?? "").trim().slice(0, 240),
         })
         .eq("id", profileId)

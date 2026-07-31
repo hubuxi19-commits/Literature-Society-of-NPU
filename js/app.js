@@ -1083,14 +1083,10 @@ async function renderAuthor(profileId) {
       });
       form.append(
         element("h2", { text: "编辑公开资料" }),
-        element("label", {}, [
-          element("span", { text: "笔名" }),
-          element("input", {
-            name: "penName",
-            value: profile.pen_name,
-            attrs: { required: true, maxlength: 24 },
-          }),
-        ]),
+        element("p", {
+          className: "profile-meta",
+          text: `笔名由注册时确定，暂不支持修改。当前笔名为“${profile.pen_name}”。`,
+        }),
         element("label", {}, [
           element("span", { text: "简介" }),
           element("textarea", {
@@ -1101,7 +1097,7 @@ async function renderAuthor(profileId) {
         element("button", {
           className: "primary-button",
           type: "submit",
-          text: "保存资料",
+          text: "保存简介",
         }),
       );
       form.querySelector("textarea").textContent = profile.bio ?? "";
@@ -1587,7 +1583,6 @@ document.addEventListener("submit", async (event) => {
     const data = new FormData(form);
     try {
       const profile = await service.updateProfile(form.dataset.profileId, {
-        pen_name: data.get("penName"),
         bio: data.get("bio"),
       });
       state.session.profile = profile;

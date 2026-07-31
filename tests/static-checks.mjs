@@ -29,6 +29,16 @@ test("旧诗歌分类在公开作品信息中规范化显示", async () => {
   );
 });
 
+test("作者资料表单将笔名设为只读并仅保存简介", async () => {
+  const app = await readFile(new URL("../js/app.js", import.meta.url), "utf8");
+  assert.match(app, /笔名由注册时确定，暂不支持修改。/);
+  assert.match(app, /text:\s*"保存简介"/);
+  assert.match(
+    app,
+    /service\.updateProfile\(form\.dataset\.profileId,\s*\{\s*bio:\s*data\.get\("bio"\),\s*\}\)/s,
+  );
+});
+
 test("样式包含视觉令牌、键盘焦点、减少动效和移动端断点", async () => {
   const css = await readFile(
     new URL("../assets/styles.css", import.meta.url),

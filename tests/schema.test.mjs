@@ -57,6 +57,38 @@ test("schema 允许新诗和旧诗并使用更新后的征稿文案", async () =
   );
 });
 
+test("schema 只允许新分类并禁止普通用户更新笔名", async () => {
+  const sql = await readFile(schemaUrl, "utf8");
+  assert.match(
+    sql,
+    /category in\s*\(\s*'新诗',\s*'旧诗',\s*'散文',\s*'小说',\s*'随笔',\s*'其他'\s*\)/i,
+  );
+  assert.match(
+    sql,
+    /grant update\s*\(\s*bio,\s*updated_at\s*\)\s*on table public\.profiles/i,
+  );
+  assert.doesNotMatch(
+    sql,
+    /grant update\s*\([^)]*pen_name[^)]*\)\s*on table public\.profiles/i,
+  );
+});
+
+test("生产迁移先转换旧诗歌再添加目标约束", async () => {
+  const migration = await readFile(
+    new URL(
+      "../supabase/migrations/20260731_split_poetry_categories_and_lock_pen_name.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  assert.match(
+    migration,
+    /update public\.works\s+set category = '新诗'\s+where category = '诗歌'/i,
+  );
+  assert.match(migration, /begin;/i);
+  assert.match(migration, /commit;/i);
+});
+
 test("前端管理员推荐操作调用受保护 RPC", async () => {
   const source = await readFile(
     new URL("../js/data-service.mjs", import.meta.url),

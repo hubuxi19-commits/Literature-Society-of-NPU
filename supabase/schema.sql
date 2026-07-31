@@ -378,7 +378,7 @@ revoke all on table public.comments from anon, authenticated;
 revoke all on table public.site_settings from anon, authenticated;
 
 grant select on table public.profiles to anon, authenticated;
-grant update (pen_name, bio, updated_at) on table public.profiles to authenticated;
+grant update (bio, updated_at) on table public.profiles to authenticated;
 
 grant select on table public.works to anon, authenticated;
 grant insert on table public.works to authenticated;

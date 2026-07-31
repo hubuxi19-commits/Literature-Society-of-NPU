@@ -95,18 +95,18 @@ test("作品列表提供作者、点赞和评论聚合字段", async () => {
   assert.equal(typeof works[0].liked_by_current_user, "boolean");
 });
 
-test("作者可以修改自己的公开资料但不能提升角色", async () => {
+test("作者只能修改自己的公开简介", async () => {
   const service = createDataService({ mode: "demo" });
   const session = await service.signIn({
     studentNumber: "2023123456",
     password: "wenyuan88",
   });
+  const originalPenName = session.profile.pen_name;
   const profile = await service.updateProfile(session.profile.id, {
-    pen_name: "新松声",
     bio: "在夜里写作。",
-    role: "admin",
+    pen_name: "不应生效",
   });
-  assert.equal(profile.pen_name, "新松声");
+  assert.equal(profile.pen_name, originalPenName);
   assert.equal(profile.bio, "在夜里写作。");
   assert.equal(profile.role, "member");
 });
