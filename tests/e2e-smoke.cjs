@@ -33,6 +33,16 @@ async function useDemoConfig(page) {
     if (!(await page.getByRole("link", { name: "开始写作" }).isVisible())) {
       throw new Error("开始写作入口不可见");
     }
+    const categories = await page
+      .getByRole("combobox", { name: "按分类筛选" })
+      .locator("option")
+      .allTextContents();
+    if (!categories.includes("新诗") || !categories.includes("旧诗")) {
+      throw new Error("桌面分类缺少新诗或旧诗");
+    }
+    if (categories.includes("诗歌")) {
+      throw new Error("桌面分类仍包含旧的诗歌选项");
+    }
   } finally {
     await browser.close();
   }

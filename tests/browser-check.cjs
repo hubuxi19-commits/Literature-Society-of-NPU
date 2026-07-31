@@ -1,4 +1,4 @@
-const { mkdirSync } = require("node:fs");
+const { mkdirSync, readFileSync, writeFileSync } = require("node:fs");
 const path = require("node:path");
 const { chromium } = require("playwright");
 
@@ -34,6 +34,32 @@ async function expectNoHorizontalOverflow(page, label) {
       `${label}存在横向溢出：${dimensions.scrollWidth} > ${dimensions.clientWidth}`,
     );
   }
+}
+
+function readPngDimensions(filePath) {
+  const png = readFileSync(filePath);
+  if (!png.subarray(1, 4).equals(Buffer.from("PNG"))) {
+    throw new Error("导出文件不是 PNG 图片");
+  }
+  return {
+    width: png.readUInt32BE(16),
+    height: png.readUInt32BE(20),
+  };
+}
+
+async function dispatchTouchSwipe(card, startX, endX) {
+  await card.dispatchEvent("touchstart", {
+    touches: [{ identifier: 1, clientX: startX, clientY: 360 }],
+    changedTouches: [{ identifier: 1, clientX: startX, clientY: 360 }],
+  });
+  await card.dispatchEvent("touchmove", {
+    touches: [{ identifier: 1, clientX: endX, clientY: 366 }],
+    changedTouches: [{ identifier: 1, clientX: endX, clientY: 366 }],
+  });
+  await card.dispatchEvent("touchend", {
+    touches: [],
+    changedTouches: [{ identifier: 1, clientX: endX, clientY: 366 }],
+  });
 }
 
 async function goToHash(page, hash, headingName) {
@@ -83,11 +109,16 @@ async function desktopFlow(browser, browserMessages) {
     throw new Error("首页仍包含刊期或封面语义");
   }
 
-  mkdirSync(screenshots, { recursive: true });
-  await page.screenshot({
-    path: path.join(screenshots, "desktop-home.png"),
-    fullPage: true,
-  });
+  const homeScreenshot = await page.screenshot({ fullPage: true });
+
+  const categorySelect = page.getByRole("combobox", { name: "按分类筛选" });
+  const categoryOptions = await categorySelect.locator("option").allTextContents();
+  if (!categoryOptions.includes("新诗") || !categoryOptions.includes("旧诗")) {
+    throw new Error(`桌面分类缺少新诗或旧诗：${categoryOptions.join("、")}`);
+  }
+  if (categoryOptions.includes("诗歌")) {
+    throw new Error("桌面分类仍包含旧的诗歌选项");
+  }
 
   const search = page.getByRole("textbox", { name: "搜索作品" });
   await search.fill("河流");
@@ -104,7 +135,7 @@ async function desktopFlow(browser, browserMessages) {
   }
   await search.fill("");
   await search.press("Enter");
-  await page.getByRole("combobox", { name: "按分类筛选" }).selectOption("小说");
+  await categorySelect.selectOption("小说");
   await expectVisible(
     workList.getByText("没有名字的车站", { exact: true }),
     "小说分类结果",
@@ -112,7 +143,7 @@ async function desktopFlow(browser, browserMessages) {
   if (await workList.getByText("河流向北", { exact: true }).count()) {
     throw new Error("分类没有过滤散文");
   }
-  await page.getByRole("combobox", { name: "按分类筛选" }).selectOption("全部");
+  await categorySelect.selectOption("全部");
 
   await page
     .getByRole("link", { name: "末班车经过友谊校区", exact: true })
@@ -150,11 +181,14 @@ async function desktopFlow(browser, browserMessages) {
   ) {
     throw new Error("诗歌首字不应浮动放大");
   }
+  if ((await page.locator(".reading-body--poetry").count()) !== 1) {
+    throw new Error("新诗没有使用诗歌阅读排版");
+  }
   await expectNoHorizontalOverflow(page, "桌面阅读页");
-  await page.screenshot({
-    path: path.join(screenshots, "desktop-reading.png"),
-    fullPage: true,
-  });
+  const readingScreenshot = await page.screenshot({ fullPage: true });
+
+  await goToHash(page, "#/works/work-library-rain", "雨落在图书馆闭馆以后");
+  await expectVisible(page.locator(".reading-body--poetry"), "旧诗正文");
 
   await goToHash(page, "#/works/work-unnamed-station", "没有名字的车站");
   const proseBody = page.locator(".reading-body--prose");
@@ -198,13 +232,23 @@ async function desktopFlow(browser, browserMessages) {
   );
 
   await goToHash(page, "#/write", "写一篇新作");
+  const writingCategory = page.locator('#writingForm [name="category"]');
+  if ((await writingCategory.inputValue()) !== "新诗") {
+    throw new Error("写作表单没有默认选择新诗");
+  }
   await page.locator('#writingForm [name="title"]').fill("浏览器里的新作");
   await page
     .locator('#writingForm [name="excerpt"]')
     .fill("用于验证发布路径的摘要");
   await page
     .locator('#writingForm [name="content"]')
-    .fill("第一段写在这里。\n\n第二段继续验证长文排版。");
+    .fill(
+      Array.from(
+        { length: 32 },
+        (_, index) =>
+          `第${index + 1}段写在浏览器里，用于验证长文分页后每一页都保留明确的保存入口。`,
+      ).join("\n\n"),
+    );
   await page.getByRole("button", { name: "发布作品" }).click();
   await page
     .getByRole("heading", { name: "浏览器里的新作", exact: true })
@@ -214,12 +258,174 @@ async function desktopFlow(browser, browserMessages) {
     throw new Error("普通成员看到了管理员推荐入口");
   }
 
+  await page.evaluate(() => {
+    const probe = {
+      anchorClicks: 0,
+      createdUrls: [],
+      revokedUrls: [],
+      layoutSamples: [],
+    };
+    window.__exportProbe = probe;
+
+    const originalAnchorClick = HTMLAnchorElement.prototype.click;
+    HTMLAnchorElement.prototype.click = function probedAnchorClick() {
+      probe.anchorClicks += 1;
+      return originalAnchorClick.call(this);
+    };
+
+    const originalCreateObjectUrl = URL.createObjectURL.bind(URL);
+    URL.createObjectURL = (object) => {
+      const url = originalCreateObjectUrl(object);
+      probe.createdUrls.push(url);
+      return url;
+    };
+    const originalRevokeObjectUrl = URL.revokeObjectURL.bind(URL);
+    URL.revokeObjectURL = (url) => {
+      probe.revokedUrls.push(url);
+      return originalRevokeObjectUrl(url);
+    };
+
+    const originalRemove = Element.prototype.remove;
+    Element.prototype.remove = function probedRemove() {
+      if (this.matches?.(".export-render-root")) {
+        this.querySelectorAll(".export-page").forEach((exportPage) => {
+          const body = exportPage.querySelector(".export-body");
+          const wordmark = exportPage.querySelector(".export-wordmark");
+          const bodyRect = body.getBoundingClientRect();
+          const wordmarkRect = wordmark.getBoundingClientRect();
+          const style = getComputedStyle(wordmark);
+          probe.layoutSamples.push({
+            bodyRect: {
+              top: bodyRect.top,
+              right: bodyRect.right,
+              bottom: bodyRect.bottom,
+              left: bodyRect.left,
+            },
+            wordmarkRect: {
+              top: wordmarkRect.top,
+              right: wordmarkRect.right,
+              bottom: wordmarkRect.bottom,
+              left: wordmarkRect.left,
+              width: wordmarkRect.width,
+              height: wordmarkRect.height,
+            },
+            wordmarkVisible:
+              wordmark.complete &&
+              wordmark.naturalWidth > 0 &&
+              wordmarkRect.width > 0 &&
+              wordmarkRect.height > 0 &&
+              style.display !== "none" &&
+              style.visibility !== "hidden",
+          });
+        });
+      }
+      return originalRemove.call(this);
+    };
+  });
+
+  let firstClickDownloads = 0;
+  const recordFirstClickDownload = () => {
+    firstClickDownloads += 1;
+  };
+  page.on("download", recordFirstClickDownload);
+  await page.getByRole("button", { name: "生成作品图片" }).click();
+  const exportPanel = page.getByRole("region", { name: "分享或保存作品图片" });
+  await exportPanel.waitFor({ state: "visible", timeout: 30000 });
+  page.off("download", recordFirstClickDownload);
+  if (firstClickDownloads !== 0) {
+    throw new Error("第一次生成点击错误触发了系统下载");
+  }
+
+  const pageCount = Number(
+    (await exportPanel.getByRole("heading").textContent()).match(/(\d+)\s*页/)?.[1],
+  );
+  if (!Number.isInteger(pageCount) || pageCount < 2) {
+    throw new Error(`长文没有生成多页图片：${pageCount}`);
+  }
+  const perPageButtons = exportPanel.getByRole("button", { name: /^保存第 \d+ 页$/ });
+  if ((await perPageButtons.count()) !== pageCount) {
+    throw new Error("多页导出没有为每一页提供保存按钮");
+  }
+  const perPageLabels = await perPageButtons.allTextContents();
+  perPageLabels.forEach((label, index) => {
+    if (label !== `保存第 ${index + 1} 页`) {
+      throw new Error(`逐页保存按钮文案错误：${label}`);
+    }
+  });
+
+  const generationProbe = await page.evaluate(() => ({
+    anchorClicks: window.__exportProbe.anchorClicks,
+    renderRoots: document.querySelectorAll(".export-render-root").length,
+    layoutSamples: window.__exportProbe.layoutSamples,
+  }));
+  if (generationProbe.anchorClicks !== 0) {
+    throw new Error("图片生成阶段调用了下载锚点");
+  }
+  if (generationProbe.renderRoots !== 0) {
+    throw new Error("图片生成后没有清理离屏导出节点");
+  }
+  if (generationProbe.layoutSamples.length !== pageCount) {
+    throw new Error("没有测量每一页的正文与标识布局");
+  }
+  generationProbe.layoutSamples.forEach((sample, index) => {
+    const { bodyRect, wordmarkRect } = sample;
+    const intersects = !(
+      wordmarkRect.left >= bodyRect.right ||
+      wordmarkRect.right <= bodyRect.left ||
+      wordmarkRect.top >= bodyRect.bottom ||
+      wordmarkRect.bottom <= bodyRect.top
+    );
+    if (!sample.wordmarkVisible) {
+      throw new Error(`第 ${index + 1} 页文学社标识不可见`);
+    }
+    if (intersects) {
+      throw new Error(`第 ${index + 1} 页文学社标识与正文区域重叠`);
+    }
+  });
+
+  const downloadPromise = page.waitForEvent("download", { timeout: 10000 });
+  await perPageButtons.first().click();
+  const download = await downloadPromise;
+  const downloadPath = await download.path();
+  const dimensions = readPngDimensions(downloadPath);
+  if (dimensions.width !== 1080 || dimensions.height !== 1920) {
+    throw new Error(`导出尺寸错误：${dimensions.width}×${dimensions.height}`);
+  }
+  if (!download.suggestedFilename().endsWith("-01.png")) {
+    throw new Error(`多页文件名缺少页码：${download.suggestedFilename()}`);
+  }
+  const deliveryProbe = await page.evaluate(() => ({
+    anchorClicks: window.__exportProbe.anchorClicks,
+    createdUrls: window.__exportProbe.createdUrls,
+    revokedUrls: window.__exportProbe.revokedUrls,
+    temporaryAnchors: document.querySelectorAll("a[download]").length,
+  }));
+  if (deliveryProbe.anchorClicks !== 1) {
+    throw new Error("第二次明确点击没有同步调用下载锚点");
+  }
+  if (
+    deliveryProbe.createdUrls.length !== 1 ||
+    deliveryProbe.revokedUrls.length !== 1 ||
+    deliveryProbe.createdUrls[0] !== deliveryProbe.revokedUrls[0]
+  ) {
+    throw new Error("下载完成后没有撤销临时 Blob URL");
+  }
+  if (deliveryProbe.temporaryAnchors !== 0) {
+    throw new Error("下载完成后没有移除临时锚点");
+  }
+
   await goToHash(page, "#/works/work-river", "河流向北");
   if (await page.getByRole("button", { name: "删除作品" }).count()) {
     throw new Error("普通成员看到了他人作品删除入口");
   }
 
   await goToHash(page, "#/authors/profile-pine", "松声");
+  const profileForm = page.locator("#profileForm");
+  await expectVisible(profileForm, "本人公开资料表单");
+  if (await profileForm.locator('input[name="penName"]').count()) {
+    throw new Error("公开资料表单仍提供可编辑笔名输入框");
+  }
+  await expectVisible(profileForm.locator('textarea[name="bio"]'), "简介输入框");
   const profileText = await page.locator("main").innerText();
   if (/20\d{8}/.test(profileText)) {
     throw new Error("作者主页展示了完整学号");
@@ -244,12 +450,14 @@ async function desktopFlow(browser, browserMessages) {
   await expectVisible(page.getByRole("button", { name: "删除作品" }), "管理员删除入口");
 
   await context.close();
+  return { homeScreenshot, readingScreenshot };
 }
 
 async function mobileFlow(browser, browserMessages) {
   const context = await browser.newContext({
     viewport: { width: 390, height: 844 },
     deviceScaleFactor: 1,
+    hasTouch: true,
   });
   const page = await context.newPage();
   await useDemoConfig(page);
@@ -267,6 +475,10 @@ async function mobileFlow(browser, browserMessages) {
   await page.getByRole("heading", { name: "让作品被读见" }).waitFor();
   const mobileCard = page.locator("[data-mobile-work-card]");
   await expectVisible(mobileCard, "移动端单篇作品卡片");
+  if ((await mobileCard.count()) !== 1) {
+    throw new Error("390×844 移动首页没有且仅有一张作品卡片");
+  }
+  const firstWorkId = await mobileCard.getAttribute("data-work-id");
   const authorKeyResult = await mobileCard
     .locator(".mobile-work-byline a")
     .evaluate((authorLink) => {
@@ -289,6 +501,34 @@ async function mobileFlow(browser, browserMessages) {
   ) {
     throw new Error("作品卡片劫持了作者链接的键盘事件");
   }
+
+  await dispatchTouchSwipe(mobileCard, 320, 220);
+  await page.waitForFunction(
+    (workId) =>
+      document.querySelector("[data-mobile-work-card]")?.dataset.workId !== workId,
+    firstWorkId,
+  );
+  const nextWorkId = await mobileCard.getAttribute("data-work-id");
+  if (!nextWorkId || nextWorkId === firstWorkId) {
+    throw new Error("向左滑动没有进入下一篇作品");
+  }
+
+  await dispatchTouchSwipe(mobileCard, 70, 170);
+  await page.waitForFunction(
+    (workId) =>
+      document.querySelector("[data-mobile-work-card]")?.dataset.workId === workId,
+    firstWorkId,
+  );
+  if ((await mobileCard.getAttribute("data-work-id")) !== firstWorkId) {
+    throw new Error("向右滑动没有返回上一篇作品");
+  }
+
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+  await mobileCard.locator(".mobile-work-copy").click();
+  await page.waitForURL(new RegExp(`#\\/works\\/${firstWorkId}$`));
+  await page.goBack();
+  await page.waitForURL(/#\/$|\/$/);
+  await expectVisible(page.locator("[data-mobile-work-card]"), "返回后的移动作品卡片");
 
   const previousButton = page.getByRole("button", { name: "← 上一篇" });
   const nextButton = page.getByRole("button", { name: "下一篇 →" });
@@ -319,10 +559,7 @@ async function mobileFlow(browser, browserMessages) {
     page.getByRole("link", { name: "讨论", exact: true }),
     "移动端讨论导航",
   );
-  await page.screenshot({
-    path: path.join(screenshots, "mobile-home.png"),
-    fullPage: true,
-  });
+  const homeScreenshot = await page.screenshot({ fullPage: true });
   await page
     .getByRole("link", { name: "末班车经过友谊校区", exact: true })
     .first()
@@ -345,22 +582,37 @@ async function mobileFlow(browser, browserMessages) {
   );
   await expectVisible(page.locator(".reading-body--poetry"), "移动端诗歌正文");
   await expectNoHorizontalOverflow(page, "移动阅读页");
-  await page.screenshot({
-    path: path.join(screenshots, "mobile-reading.png"),
-    fullPage: true,
-  });
+  const readingScreenshot = await page.screenshot({ fullPage: true });
   await context.close();
+  return { homeScreenshot, readingScreenshot };
 }
 
 (async () => {
   const browserMessages = [];
   const browser = await chromium.launch({ headless: true });
   try {
-    await desktopFlow(browser, browserMessages);
-    await mobileFlow(browser, browserMessages);
+    const desktopScreenshots = await desktopFlow(browser, browserMessages);
+    const mobileScreenshots = await mobileFlow(browser, browserMessages);
     if (browserMessages.length) {
       throw new Error(`浏览器控制台出现错误：\n${browserMessages.join("\n")}`);
     }
+    mkdirSync(screenshots, { recursive: true });
+    writeFileSync(
+      path.join(screenshots, "desktop-home.png"),
+      desktopScreenshots.homeScreenshot,
+    );
+    writeFileSync(
+      path.join(screenshots, "desktop-reading.png"),
+      desktopScreenshots.readingScreenshot,
+    );
+    writeFileSync(
+      path.join(screenshots, "mobile-home.png"),
+      mobileScreenshots.homeScreenshot,
+    );
+    writeFileSync(
+      path.join(screenshots, "mobile-reading.png"),
+      mobileScreenshots.readingScreenshot,
+    );
     console.log("Browser checks passed: desktop and mobile flows verified.");
   } finally {
     await browser.close();
