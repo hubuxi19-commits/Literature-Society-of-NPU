@@ -324,14 +324,21 @@ git status
 
 ### 发布本次改版
 
-确认上述 Supabase 迁移及验证查询已由负责人员在正确项目完成后，切换到将由 GitHub Pages 部署的 `main` 分支，完成最终检查并推送：
+仅在代码评审批准、上述 Supabase 迁移及验证查询已由负责人员在正确项目完成后，才从**主工作区（primary checkout）**发布。本节命令不得在链接工作树 `.worktrees/mobile-feed-export` 中执行；该工作树承载待集成的 `codex/mobile-feed-export` 功能分支。
+
+在主工作区确认没有未提交改动后，将已经评审批准的功能分支以快进方式集成到将由 GitHub Pages 部署的 `main`，然后重新验证并推送：
 
 ```powershell
+git status
+git switch main
+git merge --ff-only codex/mobile-feed-export
+git diff --check
+npm test
 git status
 git push origin main
 ```
 
-不要在迁移尚未确认时推送，也不要将 `service_role`、数据库密码或管理令牌带入提交。上述命令是发布步骤，不表示本仓库分支已经推送。
+`git merge --ff-only` 若不能快进会停止，不应以强制合并绕过它；先处理分支历史或按评审意见更新后再发布。测试或检查失败时不要推送。不要在迁移尚未确认时推送，也不要将 `service_role`、数据库密码或管理令牌带入提交。上述是未来的发布步骤，不表示合并、迁移或推送已经发生。
 
 ## 启用 GitHub Pages
 
@@ -345,7 +352,7 @@ git push origin main
 
 本项目使用相对资源地址和哈希路由，因此可以直接部署在仓库子路径，不需要额外重写规则。
 
-发布后检查 `https://YOUR_ACCOUNT.github.io/YOUR_REPOSITORY/`，并至少验证移动端一张作品卡、进入阅读页、生成图片和资料页只显示简介编辑。Pages 可能继续提供浏览器或 CDN 缓存的旧静态文件：等待部署完成后强制刷新（Windows/Linux：`Ctrl+F5`；macOS：`Cmd+Shift+R`），必要时使用无痕窗口再次检查；不要在缓存仍旧时重复执行数据库迁移。
+只有上述 `main` 集成、验证和 `git push origin main` 成功后，才检查 `https://YOUR_ACCOUNT.github.io/YOUR_REPOSITORY/`。至少验证移动端一张作品卡、进入阅读页、生成图片和资料页只显示简介编辑。Pages 可能继续提供浏览器或 CDN 缓存的旧静态文件：等待部署完成后强制刷新（Windows/Linux：`Ctrl+F5`；macOS：`Cmd+Shift+R`），必要时使用无痕窗口再次检查；不要在缓存仍旧时重复执行数据库迁移。
 
 如果使用自定义域名：
 
