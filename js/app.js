@@ -32,6 +32,7 @@ const demoRibbon = document.querySelector("#demoRibbon");
 const toast = document.querySelector("#toast");
 
 const DRAFT_KEY = "wenyuan-writing-draft";
+const mobileHomeMedia = window.matchMedia("(max-width: 760px)");
 
 const state = {
   session: null,
@@ -640,6 +641,7 @@ function attachMobileFeedInteractions(card, work) {
   });
 
   card.addEventListener("keydown", (event) => {
+    if (event.target !== card) return;
     if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
       event.preventDefault();
       moveMobileFeed(event.key === "ArrowRight" ? "next" : "previous");
@@ -788,6 +790,8 @@ function renderMobileHome() {
   const current = state.mobileFeed.controller.current();
 
   if (current) {
+    const previousDisabled = state.mobileFeed.controller.isAtStart();
+    const nextDisabled = state.mobileFeed.controller.isAtEnd();
     stage.append(
       element("div", { className: "mobile-feed-rule" }, [
         element("span", { text: "文苑稿页" }),
@@ -806,14 +810,22 @@ function renderMobileHome() {
             type: "button",
             text: "← 上一篇",
             dataset: { action: "mobile-feed-previous" },
-            attrs: { "aria-controls": "mobile-work-card" },
+            attrs: {
+              "aria-controls": "mobile-work-card",
+              disabled: previousDisabled,
+              "aria-disabled": String(previousDisabled),
+            },
           }),
           element("button", {
             className: "mobile-feed-control",
             type: "button",
             text: "下一篇 →",
             dataset: { action: "mobile-feed-next" },
-            attrs: { "aria-controls": "mobile-work-card" },
+            attrs: {
+              "aria-controls": "mobile-work-card",
+              disabled: nextDisabled,
+              "aria-disabled": String(nextDisabled),
+            },
           }),
         ],
       ),
@@ -838,7 +850,7 @@ function renderMobileHome() {
 }
 
 function renderHome() {
-  if (window.matchMedia("(max-width: 760px)").matches) {
+  if (mobileHomeMedia.matches) {
     renderMobileHome();
     return;
   }
@@ -1900,6 +1912,11 @@ confirmDialog.addEventListener("cancel", (event) => {
 });
 
 window.addEventListener("hashchange", renderCurrentRoute);
+
+mobileHomeMedia.addEventListener("change", () => {
+  const route = parseRoute(window.location.hash);
+  if (route.name === "home") renderHome();
+});
 
 if (!window.location.hash) {
   window.location.hash = "#/";

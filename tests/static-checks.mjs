@@ -58,10 +58,23 @@ test("移动首页使用独立队列、可访问卡片与被动触摸手势", as
   assert.match(app, /function\s+renderMobileHome\s*\(/);
   assert.match(
     app,
-    /matchMedia\("\(max-width:\s*760px\)"\)\.matches/,
+    /mobileHomeMedia\.matches/,
+  );
+  assert.match(
+    app,
+    /const\s+mobileHomeMedia\s*=\s*window\.matchMedia\("\(max-width:\s*760px\)"\)/,
+  );
+  assert.equal(
+    (app.match(/mobileHomeMedia\.addEventListener\(/g) ?? []).length,
+    1,
+  );
+  assert.match(
+    app,
+    /mobileHomeMedia\.addEventListener\([\s\S]*?parseRoute\(window\.location\.hash\)[\s\S]*?route\.name\s*===\s*"home"[\s\S]*?renderHome\(\)/,
   );
   assert.match(app, /mobileWorkCard:\s*""/);
   assert.match(app, /tabindex:\s*"0"/);
+  assert.match(app, /if\s*\(event\.target\s*!==\s*card\)\s*return/);
   assert.match(
     app,
     /addEventListener\(\s*"touchstart"[\s\S]*?passive:\s*true/,
@@ -77,6 +90,9 @@ test("移动首页使用独立队列、可访问卡片与被动触摸手势", as
   assert.match(app, /resolveHorizontalSwipe\(/);
   assert.match(app, /mobileFeed\.suppressClick\s*=\s*true/);
   assert.match(app, /requestAnimationFrame\(/);
+  assert.match(app, /controller\.isAtStart\(\)/);
+  assert.match(app, /controller\.isAtEnd\(\)/);
+  assert.match(app, /"aria-disabled":\s*String\(/);
 });
 
 test("移动首页样式提供单卡纸页舞台并保留纵向滚动", async () => {

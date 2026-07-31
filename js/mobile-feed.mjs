@@ -25,15 +25,24 @@ export function buildMobileFeedQueue(works, random = Math.random) {
   const remaining = [];
 
   uniqueWorks(works).forEach((work, index) => {
-    if (work.is_featured) featured.push({ work, index });
-    else remaining.push(work);
+    if (work.is_featured) {
+      const timestamp = new Date(work.created_at).getTime();
+      featured.push({
+        work,
+        index,
+        timestamp: Number.isNaN(timestamp) ? null : timestamp,
+      });
+    } else remaining.push(work);
   });
 
   featured.sort((left, right) => {
-    const dateDifference =
-      new Date(right.work.created_at).getTime() -
-      new Date(left.work.created_at).getTime();
-    return Number.isNaN(dateDifference) ? left.index - right.index : dateDifference;
+    // Valid dates are newest-first; invalid dates follow them in source order.
+    if (left.timestamp == null && right.timestamp == null) {
+      return left.index - right.index;
+    }
+    if (left.timestamp == null) return 1;
+    if (right.timestamp == null) return -1;
+    return right.timestamp - left.timestamp || left.index - right.index;
   });
 
   return [
@@ -55,6 +64,12 @@ export function createMobileFeedController(works, random = Math.random) {
   return {
     current() {
       return queue[cursor] ?? null;
+    },
+    isAtStart() {
+      return cursor === 0;
+    },
+    isAtEnd() {
+      return queue.length === 0 || cursor >= queue.length - 1;
     },
     next() {
       if (cursor >= queue.length - 1) return null;

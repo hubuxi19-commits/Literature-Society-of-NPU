@@ -265,6 +265,53 @@ async function mobileFlow(browser, browserMessages) {
   await page.goto(baseUrl);
   await page.waitForLoadState("networkidle");
   await page.getByRole("heading", { name: "让作品被读见" }).waitFor();
+  const mobileCard = page.locator("[data-mobile-work-card]");
+  await expectVisible(mobileCard, "移动端单篇作品卡片");
+  const authorKeyResult = await mobileCard
+    .locator(".mobile-work-byline a")
+    .evaluate((authorLink) => {
+      const before = window.location.hash;
+      const event = new KeyboardEvent("keydown", {
+        key: "Enter",
+        bubbles: true,
+        cancelable: true,
+      });
+      authorLink.dispatchEvent(event);
+      return {
+        before,
+        after: window.location.hash,
+        defaultPrevented: event.defaultPrevented,
+      };
+    });
+  if (
+    authorKeyResult.after !== authorKeyResult.before ||
+    authorKeyResult.defaultPrevented
+  ) {
+    throw new Error("作品卡片劫持了作者链接的键盘事件");
+  }
+
+  const previousButton = page.getByRole("button", { name: "← 上一篇" });
+  const nextButton = page.getByRole("button", { name: "下一篇 →" });
+  if (!(await previousButton.isDisabled())) {
+    throw new Error("移动作品队列起点没有禁用上一篇");
+  }
+  if ((await previousButton.getAttribute("aria-disabled")) !== "true") {
+    throw new Error("移动作品队列起点缺少 aria-disabled");
+  }
+  if (await nextButton.isDisabled()) {
+    throw new Error("移动作品队列起点错误禁用了下一篇");
+  }
+
+  await page.setViewportSize({ width: 900, height: 844 });
+  await expectVisible(page.locator(".desktop-home"), "跨断点后的桌面首页");
+  if (await page.locator(".mobile-home").count()) {
+    throw new Error("跨过 760px 后仍显示移动首页");
+  }
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expectVisible(
+    page.locator("[data-mobile-work-card]"),
+    "返回移动断点后的作品卡片",
+  );
   await expectNoHorizontalOverflow(page, "移动首页");
   await expectVisible(page.getByRole("button", { name: /菜单/ }), "移动菜单按钮");
   await page.getByRole("button", { name: /菜单/ }).click();
@@ -282,6 +329,20 @@ async function mobileFlow(browser, browserMessages) {
     .click();
   await page.waitForURL(/#\/works\/work-night-bus$/);
   await page.locator(".reading-title h1").waitFor();
+  await page.setViewportSize({ width: 900, height: 844 });
+  await page.waitForFunction(
+    () => !window.matchMedia("(max-width: 760px)").matches,
+  );
+  await page.evaluate(
+    () => new Promise((resolve) => requestAnimationFrame(() => resolve())),
+  );
+  if (await page.locator(".desktop-home").count()) {
+    throw new Error("非首页跨断点时错误重绘了首页");
+  }
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.waitForFunction(
+    () => window.matchMedia("(max-width: 760px)").matches,
+  );
   await expectVisible(page.locator(".reading-body--poetry"), "移动端诗歌正文");
   await expectNoHorizontalOverflow(page, "移动阅读页");
   await page.screenshot({
