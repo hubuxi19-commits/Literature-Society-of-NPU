@@ -43,5 +43,7 @@ const server = http.createServer(async (request, response) => {
 });
 
 server.listen(port, "127.0.0.1", () => {
-  console.log(`Static test server listening on ${port}`);
+  console.log(
+    `Static test server listening on 127.0.0.1:${server.address().port}`,
+  );
 });

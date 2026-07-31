@@ -1,9 +1,9 @@
 const { spawn } = require("node:child_process");
-const http = require("node:http");
 const path = require("node:path");
+const { waitForServerReady } = require("./browser-harness.cjs");
 
 const root = path.resolve(__dirname, "..");
-const server = spawn(process.execPath, ["tests/static-server.cjs", "4173"], {
+const server = spawn(process.execPath, ["tests/static-server.cjs", "0"], {
   cwd: root,
   stdio: ["ignore", "pipe", "pipe"],
   windowsHide: true,
@@ -12,44 +12,51 @@ const server = spawn(process.execPath, ["tests/static-server.cjs", "4173"], {
 server.stdout.on("data", (chunk) => process.stdout.write(chunk));
 server.stderr.on("data", (chunk) => process.stderr.write(chunk));
 
-function waitForServer(attempts = 40) {
+function waitForChildExit(child) {
   return new Promise((resolve, reject) => {
-    const tryRequest = (remaining) => {
-      const request = http.get("http://127.0.0.1:4173/", (response) => {
-        response.resume();
-        if (response.statusCode === 200) resolve();
-        else if (remaining > 0) setTimeout(() => tryRequest(remaining - 1), 100);
-        else reject(new Error(`测试服务器返回 ${response.statusCode}`));
-      });
-      request.on("error", () => {
-        if (remaining > 0) setTimeout(() => tryRequest(remaining - 1), 100);
-        else reject(new Error("测试服务器没有在 4173 端口启动"));
-      });
-      request.setTimeout(1000, () => request.destroy());
-    };
-    tryRequest(attempts);
+    child.once("error", reject);
+    child.once("exit", (code, signal) => {
+      if (code === null) {
+        reject(new Error(`浏览器检查异常退出（signal=${signal ?? "null"}）`));
+      } else {
+        resolve(code);
+      }
+    });
   });
+}
+
+async function stopServer() {
+  if (
+    !server.pid ||
+    server.exitCode !== null ||
+    server.signalCode !== null
+  ) {
+    return;
+  }
+  const exited = new Promise((resolve) => server.once("exit", resolve));
+  server.kill();
+  await exited;
 }
 
 async function run() {
   try {
-    await waitForServer();
+    const baseUrl = await waitForServerReady(server);
     const browserCheck = spawn(process.execPath, ["tests/browser-check.cjs"], {
       cwd: root,
+      env: {
+        ...process.env,
+        BROWSER_CHECK_BASE_URL: baseUrl,
+      },
       stdio: "inherit",
       windowsHide: true,
     });
-    const exitCode = await new Promise((resolve) => {
-      browserCheck.on("exit", (code) => resolve(code ?? 1));
-    });
-    process.exitCode = exitCode;
+    process.exitCode = await waitForChildExit(browserCheck);
   } finally {
-    server.kill();
+    await stopServer();
   }
 }
 
 run().catch((error) => {
   console.error(error);
-  server.kill();
   process.exitCode = 1;
 });

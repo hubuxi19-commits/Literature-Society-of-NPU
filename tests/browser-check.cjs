@@ -1,8 +1,12 @@
 const { mkdirSync, readFileSync, writeFileSync } = require("node:fs");
 const path = require("node:path");
 const { chromium } = require("playwright");
+const {
+  inspectPng,
+  resolveBrowserBaseUrl,
+} = require("./browser-harness.cjs");
 
-const baseUrl = "http://127.0.0.1:4173";
+const baseUrl = resolveBrowserBaseUrl(process.env.BROWSER_CHECK_BASE_URL);
 const screenshots = path.resolve(__dirname, "..", "screenshots");
 const demoConfigModule = `export const config = {
   mode: "demo",
@@ -37,14 +41,7 @@ async function expectNoHorizontalOverflow(page, label) {
 }
 
 function readPngDimensions(filePath) {
-  const png = readFileSync(filePath);
-  if (!png.subarray(1, 4).equals(Buffer.from("PNG"))) {
-    throw new Error("导出文件不是 PNG 图片");
-  }
-  return {
-    width: png.readUInt32BE(16),
-    height: png.readUInt32BE(20),
-  };
+  return inspectPng(readFileSync(filePath));
 }
 
 async function dispatchTouchSwipe(card, startX, endX) {
