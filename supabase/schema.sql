@@ -19,7 +19,7 @@ create table if not exists public.works (
   excerpt text not null default '' check (char_length(excerpt) <= 180),
   content text not null check (char_length(content) between 1 and 50000),
   category text not null check (
-    category in ('诗歌', '散文', '小说', '随笔', '其他')
+    category in ('新诗', '旧诗', '散文', '小说', '随笔', '其他')
   ),
   status text not null default 'published' check (
     status in ('published', 'hidden')
@@ -420,7 +420,7 @@ values
     'submission',
     jsonb_build_object(
       'title', '长期征稿',
-      'body', '诗歌、散文、小说、随笔与其他文字均可投稿。请确保作品为本人原创，并尊重评论区里的每一位读者。'
+      'body', '新诗、旧诗、散文、小说、随笔与其他文字均可投稿。请确保作品为本人原创，并尊重评论区里的每一位读者。'
     )
   ),
   (

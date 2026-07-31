@@ -19,6 +19,16 @@ test("公开应用源码不包含完整学号的可见 HTML 文案", async () =>
   assert.doesNotMatch(app, /service_role/i);
 });
 
+test("旧诗歌分类在公开作品信息中规范化显示", async () => {
+  const app = await readFile(new URL("../js/app.js", import.meta.url), "utf8");
+  assert.match(app, /text:\s*normalizeCategory\(work\.category\)/);
+  assert.match(app, /\$\{normalizeCategory\(work\.category\)\}/);
+  assert.match(
+    app,
+    /normalizeCategory\(item\.category\)\s*===\s*normalizeCategory\(work\.category\)/,
+  );
+});
+
 test("样式包含视觉令牌、键盘焦点、减少动效和移动端断点", async () => {
   const css = await readFile(
     new URL("../assets/styles.css", import.meta.url),

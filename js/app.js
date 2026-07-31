@@ -8,6 +8,7 @@ import {
   filterAndSortWorks,
   formatDate,
   isPoetryCategory,
+  normalizeCategory,
   parseRoute,
   PUBLISHABLE_CATEGORIES,
   validatePassword,
@@ -208,7 +209,7 @@ function createWorkRow(work) {
     className: "work-margin",
     attrs: { "aria-label": "作品分类与编辑标记" },
   });
-  margin.append(element("span", { text: work.category }));
+  margin.append(element("span", { text: normalizeCategory(work.category) }));
   if (work.is_featured) {
     margin.append(
       element("span", {
@@ -262,7 +263,7 @@ function createFeaturedItem(work, index) {
   content.append(
     heading,
     element("p", {
-      text: `${work.author_pen_name} · ${work.category} · 喜欢 ${work.like_count}`,
+      text: `${work.author_pen_name} · ${normalizeCategory(work.category)} · 喜欢 ${work.like_count}`,
     }),
   );
   item.append(
@@ -708,7 +709,7 @@ async function renderWork(workId) {
     const shell = element("div", { className: "reading-shell" });
     const head = element("header", { className: "reading-head" });
     const margin = element("aside", { className: "reading-margin" }, [
-      element("span", { text: work.category }),
+      element("span", { text: normalizeCategory(work.category) }),
       work.is_featured
         ? element("p", { className: "featured-mark", text: "编辑推荐" })
         : null,
@@ -864,7 +865,8 @@ async function renderWork(workId) {
       .filter(
         (item) =>
           item.id !== work.id &&
-          (item.category === work.category || item.author_id === work.author_id),
+          (normalizeCategory(item.category) === normalizeCategory(work.category) ||
+            item.author_id === work.author_id),
       )
       .slice(0, 3);
     const relatedBlock = element("section", { className: "related-block" }, [

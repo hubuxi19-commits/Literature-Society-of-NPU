@@ -45,6 +45,18 @@ test("schema 对点赞唯一性、评论父子关系和字段长度设置约束"
   assert.match(sql, /char_length\(content\)\s+between\s+1\s+and\s+50000/i);
 });
 
+test("schema 允许新诗和旧诗并使用更新后的征稿文案", async () => {
+  const sql = await readFile(schemaUrl, "utf8");
+  assert.match(
+    sql,
+    /category\s+in\s*\(\s*'新诗',\s*'旧诗',\s*'散文',\s*'小说',\s*'随笔',\s*'其他'\s*\)/i,
+  );
+  assert.match(
+    sql,
+    /'body',\s*'新诗、旧诗、散文、小说、随笔与其他文字均可投稿。/,
+  );
+});
+
 test("前端管理员推荐操作调用受保护 RPC", async () => {
   const source = await readFile(
     new URL("../js/data-service.mjs", import.meta.url),
