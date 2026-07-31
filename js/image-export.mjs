@@ -24,11 +24,12 @@ export function splitExportUnits(content, category) {
   }
 
   return normalized
-    .trim()
-    .split(/\n\s*\n+/)
-    .map((paragraph) => paragraph.replace(/\s*\n\s*/g, " ").trim())
-    .filter(Boolean)
-    .map((text) => ({ type: "paragraph", text }));
+    .split(/(\n(?:[ \t]*\n)+)/)
+    .filter((text) => text.length > 0)
+    .map((text) => ({
+      type: /^\n(?:[ \t]*\n)+$/.test(text) ? "space" : "paragraph",
+      text,
+    }));
 }
 
 function findFittingCharacterCount(unit, measure, maxHeight) {
@@ -48,7 +49,7 @@ function findFittingCharacterCount(unit, measure, maxHeight) {
     }
   }
 
-  return best || 1;
+  return best;
 }
 
 export function paginateExportUnits(units, measure, maxHeight) {
@@ -80,6 +81,9 @@ export function paginateExportUnits(units, measure, maxHeight) {
       while (remaining.length) {
         unit = { ...unit, text: remaining.join("") };
         const fitCount = findFittingCharacterCount(unit, measure, maxHeight);
+        if (!fitCount) {
+          throw new Error("作品中存在无法完整排入单页的内容，请调整后重试");
+        }
         const fragment = {
           ...unit,
           text: remaining.slice(0, fitCount).join(""),
@@ -90,6 +94,11 @@ export function paginateExportUnits(units, measure, maxHeight) {
       continue;
     }
 
+    if (unitHeight > maxHeight) {
+      const label = unit.type === "line" ? "诗行" : "内容单元";
+      throw new Error(`作品中的${label}无法完整排入单页，请调整后重试`);
+    }
+
     if (page.length && pageHeight + unitHeight > maxHeight) {
       finishPage();
     }
@@ -97,11 +106,22 @@ export function paginateExportUnits(units, measure, maxHeight) {
     page.push(unit);
     pageHeight += unitHeight;
 
-    if (unitHeight > maxHeight) finishPage();
   }
 
   finishPage();
   return pages;
+}
+
+export function assertExportPageFits(page, pageIndex) {
+  const pageNumber = pageIndex + 1;
+  if (page.scrollHeight > page.clientHeight) {
+    throw new Error(`第 ${pageNumber} 页内容超出导出画布，图片没有生成`);
+  }
+
+  const body = page.querySelector(".export-body");
+  if (body && body.scrollHeight > body.clientHeight) {
+    throw new Error(`第 ${pageNumber} 页正文超出可用区域，图片没有生成`);
+  }
 }
 
 function sanitizeFilePart(value, fallback) {
@@ -321,7 +341,8 @@ export async function exportWorkImages(work, options = {}) {
     });
 
     const blobs = [];
-    for (const page of pageElements) {
+    for (const [pageIndex, page] of pageElements.entries()) {
+      assertExportPageFits(page, pageIndex);
       blobs.push(await renderPageBlob(page, wordmarkDataUrl, doc, win));
     }
 

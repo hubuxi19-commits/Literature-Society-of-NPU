@@ -1,6 +1,7 @@
 import { demoSeed } from "./demo-data.mjs";
 import {
   createExcerpt,
+  PUBLISHABLE_CATEGORIES,
   studentNumberToAuthEmail,
   validatePassword,
   validateStudentNumber,
@@ -27,6 +28,14 @@ function requireText(value, label, maximum) {
     throw new Error(`${label}不能超过 ${maximum} 字`);
   }
   return text;
+}
+
+function requirePublishableCategory(value) {
+  const category = requireText(value, "分类", 12);
+  if (!PUBLISHABLE_CATEGORIES.includes(category)) {
+    throw new Error(`分类只能是${PUBLISHABLE_CATEGORIES.join("、")}`);
+  }
+  return category;
 }
 
 function createDemoService() {
@@ -175,7 +184,7 @@ function createDemoService() {
         excerpt:
           String(input.excerpt ?? "").trim() || createExcerpt(content, 96),
         content,
-        category: requireText(input.category, "分类", 12),
+        category: requirePublishableCategory(input.category),
         status: "published",
         is_featured: false,
         created_at: now,
@@ -497,7 +506,7 @@ function createSupabaseService(config) {
           excerpt:
             String(input.excerpt ?? "").trim() || createExcerpt(content, 96),
           content,
-          category: requireText(input.category, "分类", 12),
+          category: requirePublishableCategory(input.category),
         })
         .select("*, profiles!works_author_id_fkey(pen_name,bio,role)")
         .single();

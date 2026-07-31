@@ -927,6 +927,35 @@ main {
   margin-top: 0.9rem;
 }
 
+.export-previews {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.export-preview {
+  margin: 0;
+}
+
+.export-preview-image {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1080 / 1920;
+  border: 1px solid var(--rule);
+  background: var(--paper-light);
+  box-shadow: 0 12px 28px rgb(65 49 31 / 10%);
+  object-fit: contain;
+}
+
+.export-preview figcaption {
+  margin-top: 0.35rem;
+  color: var(--soft-ink);
+  font-family: var(--utility);
+  font-size: 0.72rem;
+  text-align: center;
+}
+
 /* “素笺”导出稿页固定使用 CSS 像素，必须置于响应式规则之外。 */
 .export-render-root {
   position: fixed;
@@ -945,7 +974,7 @@ main {
   width: 1080px;
   height: 1920px;
   padding: 112px 96px 0;
-  overflow: hidden;
+  overflow: visible;
   background: #f3eee3;
   color: #24211d;
   font-family: "Noto Serif SC", "Songti SC", SimSun, serif;
@@ -962,7 +991,7 @@ main {
 
 .export-body {
   min-height: 0;
-  overflow: hidden;
+  overflow: visible;
   font-size: 38px;
   line-height: 1.9;
   overflow-wrap: anywhere;
@@ -985,6 +1014,7 @@ main {
   padding-bottom: 28px;
   text-align: justify;
   text-indent: 2em;
+  white-space: pre-wrap;
 }
 
 .export-footer {
@@ -1777,7 +1807,45 @@ main {
   }
 }
 
+.mobile-bottom-nav {
+  display: none;
+}
+
 @media (max-width: 760px) {
+  body {
+    padding-bottom: calc(var(--mobile-nav-height) + env(safe-area-inset-bottom));
+  }
+
+  .mobile-bottom-nav {
+    position: fixed;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 60;
+    display: grid;
+    min-height: calc(var(--mobile-nav-height) + env(safe-area-inset-bottom));
+    grid-template-columns: repeat(4, 1fr);
+    padding: 0.35rem 0.4rem env(safe-area-inset-bottom);
+    border-top: 1px solid var(--rule);
+    background: rgb(251 248 241 / 97%);
+    box-shadow: 0 -10px 30px rgb(65 49 31 / 8%);
+    font-family: var(--utility);
+  }
+
+  .mobile-bottom-nav a {
+    display: grid;
+    min-height: 44px;
+    place-items: center;
+    color: var(--soft-ink);
+    font-size: 0.76rem;
+    letter-spacing: 0.08em;
+    text-decoration: none;
+  }
+
+  .mobile-bottom-nav a[aria-current="page"] {
+    color: var(--vermilion);
+  }
+
   .desktop-home .hero,
   .desktop-home .editorial-note,
   .desktop-home .lead-grid,
@@ -1819,6 +1887,35 @@ main {
     font-size: 0.72rem;
   }
 
+  .mobile-category-strip {
+    display: flex;
+    gap: 0.4rem;
+    width: 100%;
+    padding: 0.7rem 1rem;
+    overflow-x: auto;
+    border-bottom: 1px solid var(--rule);
+    scrollbar-width: thin;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .mobile-category-strip button {
+    min-width: max-content;
+    min-height: 44px;
+    padding: 0.45rem 1rem;
+    border: 1px solid var(--rule);
+    background: transparent;
+    color: var(--soft-ink);
+    cursor: pointer;
+    font-family: var(--utility);
+    font-size: 0.76rem;
+  }
+
+  .mobile-category-strip button[aria-pressed="true"] {
+    border-color: var(--vermilion);
+    background: rgb(140 47 43 / 7%);
+    color: var(--vermilion);
+  }
+
   .mobile-feed-filters {
     border-bottom: 1px solid var(--rule);
     font-family: var(--utility);
@@ -1858,6 +1955,7 @@ main {
   }
 
   .mobile-feed-filters .filter-form {
+    grid-template-columns: 1fr;
     gap: 0.8rem;
   }
 
@@ -2026,10 +2124,17 @@ main {
     letter-spacing: 0.05em;
   }
 
-  .mobile-feed-control:hover,
-  .mobile-feed-control:active {
+  .mobile-feed-control:not(:disabled):hover,
+  .mobile-feed-control:not(:disabled):active {
     border-color: var(--vermilion);
     color: var(--vermilion);
+  }
+
+  .mobile-feed-control:disabled {
+    border-color: var(--rule-light);
+    color: var(--soft-ink);
+    cursor: not-allowed;
+    opacity: 0.45;
   }
 
   .mobile-feed-stage > .empty-state {

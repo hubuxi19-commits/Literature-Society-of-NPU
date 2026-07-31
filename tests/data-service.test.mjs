@@ -111,6 +111,35 @@ test("作者只能修改自己的公开简介", async () => {
   assert.equal(profile.role, "member");
 });
 
+test("演示服务拒绝发布分类集合之外的作品分类", async () => {
+  const service = createDataService({ mode: "demo" });
+  await service.signIn({
+    studentNumber: "2023123456",
+    password: "wenyuan88",
+  });
+
+  await assert.rejects(
+    () =>
+      service.createWork({
+        title: "错误分类",
+        excerpt: "摘要",
+        content: "正文",
+        category: "诗歌",
+      }),
+    /分类.*新诗、旧诗、散文、小说、随笔、其他/,
+  );
+  await assert.rejects(
+    () =>
+      service.createWork({
+        title: "任意分类",
+        excerpt: "摘要",
+        content: "正文",
+        category: "影评",
+      }),
+    /分类.*新诗、旧诗、散文、小说、随笔、其他/,
+  );
+});
+
 test("未登录用户不能执行写操作", async () => {
   const service = createDataService({ mode: "demo" });
   await assert.rejects(

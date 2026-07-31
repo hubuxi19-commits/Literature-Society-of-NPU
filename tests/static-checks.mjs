@@ -13,6 +13,21 @@ test("HTML 使用独立样式和模块脚本并包含可访问弹窗", async () 
   assert.doesNotMatch(html, /<style[\s>]/i);
 });
 
+test("移动端底部导航使用四个已批准入口", async () => {
+  const html = await readFile(new URL("../index.html", import.meta.url), "utf8");
+  const navigation = html.match(
+    /<nav[^>]+class="mobile-bottom-nav"[\s\S]*?<\/nav>/,
+  )?.[0];
+
+  assert.ok(navigation, "缺少移动端底部导航");
+  assert.deepEqual(
+    [...navigation.matchAll(/<a[^>]*>\s*([^<]+?)\s*<\/a>/g)].map((match) =>
+      match[1].trim(),
+    ),
+    ["翻阅", "讨论", "写作", "我的"],
+  );
+});
+
 test("公开应用源码不包含完整学号的可见 HTML 文案", async () => {
   const app = await readFile(new URL("../js/app.js", import.meta.url), "utf8");
   assert.doesNotMatch(app, />\s*20\d{8}\s*</);
@@ -87,9 +102,16 @@ test("移动首页使用独立队列、可访问卡片与被动触摸手势", as
     app,
     /addEventListener\(\s*"touchend"[\s\S]*?passive:\s*true/,
   );
+  assert.match(
+    app,
+    /addEventListener\(\s*"touchcancel"[\s\S]*?mobileFeed\.touch\s*=\s*null[\s\S]*?passive:\s*true/,
+  );
   assert.match(app, /resolveHorizontalSwipe\(/);
   assert.match(app, /mobileFeed\.suppressClick\s*=\s*true/);
-  assert.match(app, /requestAnimationFrame\(/);
+  assert.match(
+    app,
+    /if\s*\(state\.mobileFeed\.suppressClick\)[\s\S]*?mobileFeed\.suppressClick\s*=\s*false/,
+  );
   assert.match(app, /controller\.isAtStart\(\)/);
   assert.match(app, /controller\.isAtEnd\(\)/);
   assert.match(app, /"aria-disabled":\s*String\(/);
@@ -112,6 +134,13 @@ test("移动首页样式提供单卡纸页舞台并保留纵向滚动", async ()
   );
   assert.match(css, /mobile-work-copy--poetry[\s\S]*?white-space:\s*pre-wrap/);
   assert.match(css, /mobile-feed-control[\s\S]*?min-height:\s*44px/);
+  assert.match(
+    css,
+    /\.mobile-feed-control:disabled\s*\{[\s\S]*?cursor:\s*not-allowed/,
+  );
+  assert.match(css, /\.mobile-feed-control:not\(:disabled\):hover/);
+  assert.match(css, /\.mobile-category-strip[\s\S]*?overflow-x:\s*auto/);
+  assert.match(css, /\.mobile-bottom-nav[\s\S]*?env\(safe-area-inset-bottom\)/);
 });
 
 test("阅读页通过本地素笺模板生成 1080×1920 PNG", async () => {
@@ -125,6 +154,9 @@ test("阅读页通过本地素笺模板生成 1080×1920 PNG", async () => {
   assert.match(app, /data(?:set)?:\s*\{\s*action:\s*"export-work"/);
   assert.match(app, /text:\s*"生成作品图片"/);
   assert.match(app, /currentExport:\s*null/);
+  assert.match(app, /function\s+cleanupPreparedExport\s*\(/);
+  assert.match(app, /URL\.revokeObjectURL\(/);
+  assert.match(app, /className:\s*"export-preview-image"/);
   assert.match(app, /action:\s*"share-export"/);
   assert.match(app, /action:\s*"save-export"/);
   assert.match(app, /action:\s*"save-export-page"/);
@@ -145,9 +177,21 @@ test("阅读页通过本地素笺模板生成 1080×1920 PNG", async () => {
   assert.match(css, /\.export-wordmark[\s\S]*?width:\s*30%/);
   assert.match(css, /\.export-wordmark[\s\S]*?right:\s*64px/);
   assert.match(css, /\.export-wordmark[\s\S]*?bottom:\s*64px/);
+  assert.match(css, /\.export-preview-image[\s\S]*?aspect-ratio:\s*1080\s*\/\s*1920/);
   assert.doesNotMatch(publicSource, /service_role/i);
   assert.doesNotMatch(
     publicSource,
     /(?:openai|stability|replicate|midjourney|image[-_ ]?generation)[^\n]{0,80}(?:api|endpoint|fetch)/i,
+  );
+});
+
+test("README 只保留当前功能分支的权威快进发布顺序", async () => {
+  const readme = await readFile(new URL("../README.md", import.meta.url), "utf8");
+
+  assert.doesNotMatch(readme, /codex\/literature-community-redesign/);
+  assert.doesNotMatch(readme, /--no-ff/);
+  assert.equal(
+    (readme.match(/git merge --ff-only codex\/mobile-feed-export/g) ?? []).length,
+    1,
   );
 });

@@ -34,6 +34,7 @@ const confirmMessage = document.querySelector("#confirmMessage");
 const accountButton = document.querySelector("#accountButton");
 const accountMenu = document.querySelector("#accountMenu");
 const profileLink = document.querySelector("#profileLink");
+const mobileProfileLink = document.querySelector("#mobileProfileLink");
 const demoRibbon = document.querySelector("#demoRibbon");
 const toast = document.querySelector("#toast");
 
@@ -154,17 +155,30 @@ function updateHeader() {
     profileLink.href = `#/authors/${encodeURIComponent(
       state.session.profile.id,
     )}`;
+    mobileProfileLink.href = profileLink.href;
+    delete mobileProfileLink.dataset.action;
+    delete mobileProfileLink.dataset.returnHash;
   } else {
     accountButton.textContent = "登录";
     accountButton.dataset.action = "open-auth";
     accountMenu.hidden = true;
+    mobileProfileLink.href = "#/";
+    mobileProfileLink.dataset.action = "open-auth";
+    mobileProfileLink.dataset.returnHash = "#/";
   }
 
   const route = parseRoute(window.location.hash);
   document.querySelectorAll("[data-nav]").forEach((link) => {
-    const active =
-      (link.dataset.nav === "home" && ["home", "work", "author", "write"].includes(route.name)) ||
-      link.dataset.nav === route.name;
+    const isMobileNavigation = Boolean(link.closest(".mobile-bottom-nav"));
+    const active = isMobileNavigation
+      ? (link.dataset.nav === "home" && ["home", "work"].includes(route.name)) ||
+        link.dataset.nav === route.name ||
+        (link.dataset.nav === "my" &&
+          route.name === "author" &&
+          route.id === state.session?.profile?.id)
+      : (link.dataset.nav === "home" &&
+          ["home", "work", "author", "write"].includes(route.name)) ||
+        link.dataset.nav === route.name;
     if (active) link.setAttribute("aria-current", "page");
     else link.removeAttribute("aria-current");
   });
@@ -611,6 +625,12 @@ function getPreparedExport(trigger) {
   return prepared;
 }
 
+function cleanupPreparedExport() {
+  const prepared = state.currentExport;
+  state.currentExport = null;
+  prepared?.previewUrls?.forEach((url) => URL.revokeObjectURL(url));
+}
+
 function renderExportActions(prepared, container) {
   const panel = element("section", {
     className: "export-results",
@@ -620,6 +640,27 @@ function renderExportActions(prepared, container) {
     element("h3", { text: `图片已经生成 · ${prepared.files.length} 页` }),
     element("p", { text: "请点击下方按钮分享或保存图片。" }),
   );
+
+  const previews = element("div", { className: "export-previews" });
+  prepared.previewUrls.forEach((url, pageIndex) => {
+    previews.append(
+      element("figure", { className: "export-preview" }, [
+        element("img", {
+          className: "export-preview-image",
+          attrs: {
+            src: url,
+            alt: `《${prepared.work.title}》第 ${pageIndex + 1} 页预览`,
+            width: "1080",
+            height: "1920",
+          },
+        }),
+        element("figcaption", {
+          text: `第 ${pageIndex + 1} / ${prepared.files.length} 页`,
+        }),
+      ]),
+    );
+  });
+  panel.append(previews);
 
   const actions = element("div", { className: "export-result-actions" });
   if (canShareExportFiles(prepared.files)) {
@@ -662,6 +703,50 @@ function renderExportActions(prepared, container) {
   container.replaceChildren(panel);
 }
 
+function createMobileCategoryStrip() {
+  const strip = element("nav", {
+    className: "mobile-category-strip",
+    attrs: { "aria-label": "作品分类" },
+  });
+  CATEGORIES.forEach((category) => {
+    strip.append(
+      element("button", {
+        type: "button",
+        text: category,
+        dataset: { action: "mobile-category", category },
+        attrs: {
+          "aria-pressed": String(state.filters.category === category),
+        },
+      }),
+    );
+  });
+  return strip;
+}
+
+function createMobileSearchBand() {
+  const band = element("section", {
+    className: "filter-band mobile-search-band",
+    attrs: { "aria-label": "搜索作品" },
+  });
+  const form = element("form", {
+    className: "filter-form",
+    id: "homeFilters",
+  });
+  const search = element("div", { className: "search-field" });
+  search.append(
+    element("input", {
+      name: "query",
+      value: state.filters.query,
+      placeholder: "搜索标题、摘要或作者",
+      attrs: { "aria-label": "搜索作品" },
+    }),
+    element("button", { type: "submit", text: "搜索" }),
+  );
+  form.append(search);
+  band.append(form);
+  return band;
+}
+
 function buildMobileFeedSignature(works) {
   return JSON.stringify([
     state.filters.category,
@@ -697,6 +782,8 @@ function attachMobileFeedInteractions(card, work) {
   card.addEventListener("click", (event) => {
     if (state.mobileFeed.suppressClick) {
       event.preventDefault();
+      event.stopPropagation();
+      state.mobileFeed.suppressClick = false;
       return;
     }
     if (
@@ -755,11 +842,17 @@ function attachMobileFeedInteractions(card, work) {
       const deltaX = (touch?.clientX ?? gesture.endX) - gesture.startX;
       const deltaY = (touch?.clientY ?? gesture.endY) - gesture.startY;
       const direction = resolveHorizontalSwipe(deltaX, deltaY);
-      if (!direction || !moveMobileFeed(direction)) return;
+      if (!direction) return;
       state.mobileFeed.suppressClick = true;
-      window.requestAnimationFrame(() => {
-        state.mobileFeed.suppressClick = false;
-      });
+      moveMobileFeed(direction);
+    },
+    { passive: true },
+  );
+
+  card.addEventListener(
+    "touchcancel",
+    () => {
+      state.mobileFeed.touch = null;
     },
     { passive: true },
   );
@@ -845,8 +938,8 @@ function renderMobileHome() {
     className: "mobile-feed-filters",
   });
   filterPanel.append(
-    element("summary", { text: "搜索与筛选作品" }),
-    createFilterBand(),
+    element("summary", { text: "搜索作品" }),
+    createMobileSearchBand(),
   );
   const stage = element("section", {
     className: "mobile-feed-stage",
@@ -913,7 +1006,7 @@ function renderMobileHome() {
     );
   }
 
-  shell.append(masthead, filterPanel, stage);
+  shell.append(masthead, createMobileCategoryStrip(), filterPanel, stage);
   replaceContent(app, shell);
 }
 
@@ -1046,8 +1139,8 @@ function createCommentItem(comment, workId, depth = 0) {
 
 async function renderWork(workId) {
   showLoading("正在展开作品");
+  cleanupPreparedExport();
   state.currentWork = null;
-  state.currentExport = null;
   try {
     const work = await service.getWork(workId);
     state.currentWork = work;
@@ -1656,6 +1749,8 @@ async function renderCurrentRoute() {
     .setAttribute("aria-expanded", "false");
   updateHeader();
   const route = parseRoute(window.location.hash);
+  cleanupPreparedExport();
+  if (route.name !== "work") state.currentWork = null;
   try {
     if (route.name === "home") renderHome();
     else if (route.name === "work") await renderWork(route.id);
@@ -1802,6 +1897,7 @@ document.addEventListener("click", async (event) => {
     siteHeader.dataset.menuOpen = String(open);
     trigger.setAttribute("aria-expanded", String(open));
   } else if (action === "open-auth") {
+    event.preventDefault();
     openAuth("login", trigger.dataset.returnHash || null);
   } else if (action === "close-auth") {
     closeAuth();
@@ -1818,6 +1914,9 @@ document.addEventListener("click", async (event) => {
   } else if (action === "reset-filters") {
     state.filters = { query: "", category: "全部", sort: "latest" };
     renderHome();
+  } else if (action === "mobile-category") {
+    state.filters.category = trigger.dataset.category;
+    renderMobileHome();
   } else if (action === "mobile-feed-previous") {
     moveMobileFeed("previous");
   } else if (action === "mobile-feed-next") {
@@ -1837,19 +1936,36 @@ document.addEventListener("click", async (event) => {
     trigger.disabled = true;
     trigger.textContent = "正在生成…";
     const resultsContainer = document.querySelector(".export-results-host");
+    cleanupPreparedExport();
     resultsContainer?.replaceChildren();
-    state.currentExport = null;
 
     try {
       const result = await exportWorkImages(work);
+      const route = parseRoute(window.location.hash);
+      if (
+        state.currentWork !== work ||
+        route.name !== "work" ||
+        String(route.id) !== String(work.id)
+      ) {
+        return;
+      }
       const prepared = {
         work,
         workId: String(work.id),
         blobs: result.blobs,
         files: result.files,
+        previewUrls: [],
       };
       state.currentExport = prepared;
-      renderExportActions(prepared, resultsContainer);
+      try {
+        prepared.files.forEach((file) => {
+          prepared.previewUrls.push(URL.createObjectURL(file));
+        });
+        renderExportActions(prepared, resultsContainer);
+      } catch (error) {
+        cleanupPreparedExport();
+        throw error;
+      }
       showToast(
         `已生成 ${result.blobs.length} 页，请点击分享或保存。`,
         "success",

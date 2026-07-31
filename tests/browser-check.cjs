@@ -1,4 +1,5 @@
 const { mkdirSync, readFileSync, writeFileSync } = require("node:fs");
+const assert = require("node:assert/strict");
 const path = require("node:path");
 const { chromium } = require("playwright");
 const {
@@ -233,19 +234,18 @@ async function desktopFlow(browser, browserMessages) {
   if ((await writingCategory.inputValue()) !== "新诗") {
     throw new Error("写作表单没有默认选择新诗");
   }
+  await writingCategory.selectOption("散文");
   await page.locator('#writingForm [name="title"]').fill("浏览器里的新作");
   await page
     .locator('#writingForm [name="excerpt"]')
     .fill("用于验证发布路径的摘要");
-  await page
-    .locator('#writingForm [name="content"]')
-    .fill(
-      Array.from(
-        { length: 32 },
-        (_, index) =>
-          `第${index + 1}段写在浏览器里，用于验证长文分页后每一页都保留明确的保存入口。`,
-      ).join("\n\n"),
-    );
+  const publishedParagraphs = Array.from(
+    { length: 32 },
+    (_, index) =>
+      `第${index + 1}段写在浏览器里。\n这一行用于验证段内换行不会在图片导出时变成空格。`,
+  );
+  const publishedContent = publishedParagraphs.join("\n\n");
+  await page.locator('#writingForm [name="content"]').fill(publishedContent);
   await page.getByRole("button", { name: "发布作品" }).click();
   await page
     .getByRole("heading", { name: "浏览器里的新作", exact: true })
@@ -261,6 +261,7 @@ async function desktopFlow(browser, browserMessages) {
       createdUrls: [],
       revokedUrls: [],
       layoutSamples: [],
+      renderedUnits: [],
     };
     window.__exportProbe = probe;
 
@@ -292,6 +293,10 @@ async function desktopFlow(browser, browserMessages) {
           const wordmarkRect = wordmark.getBoundingClientRect();
           const style = getComputedStyle(wordmark);
           probe.layoutSamples.push({
+            pageScrollHeight: exportPage.scrollHeight,
+            pageClientHeight: exportPage.clientHeight,
+            bodyScrollHeight: body.scrollHeight,
+            bodyClientHeight: body.clientHeight,
             bodyRect: {
               top: bodyRect.top,
               right: bodyRect.right,
@@ -313,6 +318,12 @@ async function desktopFlow(browser, browserMessages) {
               wordmarkRect.height > 0 &&
               style.display !== "none" &&
               style.visibility !== "hidden",
+          });
+          body.querySelectorAll(".export-paragraph, .export-space").forEach((unit) => {
+            probe.renderedUnits.push({
+              className: unit.className,
+              text: unit.textContent,
+            });
           });
         });
       }
@@ -350,10 +361,39 @@ async function desktopFlow(browser, browserMessages) {
     }
   });
 
+  const previews = exportPanel.locator(".export-preview-image");
+  if ((await previews.count()) !== pageCount) {
+    throw new Error("导出结果没有为每一页显示图片预览");
+  }
+  await previews.first().waitFor({ state: "visible" });
+  const previewMetrics = await previews.evaluateAll((images) =>
+    images.map((image) => {
+      const rect = image.getBoundingClientRect();
+      return {
+        width: rect.width,
+        height: rect.height,
+        naturalWidth: image.naturalWidth,
+        naturalHeight: image.naturalHeight,
+      };
+    }),
+  );
+  previewMetrics.forEach((metric, index) => {
+    if (Math.abs(metric.width / metric.height - 1080 / 1920) > 0.01) {
+      throw new Error(`第 ${index + 1} 页预览比例不是 1080×1920`);
+    }
+    if (metric.naturalWidth !== 1080 || metric.naturalHeight !== 1920) {
+      throw new Error(`第 ${index + 1} 页预览图片尺寸错误`);
+    }
+  });
+  const exportPreviewScreenshot = await exportPanel.screenshot();
+
   const generationProbe = await page.evaluate(() => ({
     anchorClicks: window.__exportProbe.anchorClicks,
+    createdUrls: [...window.__exportProbe.createdUrls],
+    revokedUrls: [...window.__exportProbe.revokedUrls],
     renderRoots: document.querySelectorAll(".export-render-root").length,
     layoutSamples: window.__exportProbe.layoutSamples,
+    renderedUnits: window.__exportProbe.renderedUnits,
   }));
   if (generationProbe.anchorClicks !== 0) {
     throw new Error("图片生成阶段调用了下载锚点");
@@ -366,6 +406,12 @@ async function desktopFlow(browser, browserMessages) {
   }
   generationProbe.layoutSamples.forEach((sample, index) => {
     const { bodyRect, wordmarkRect } = sample;
+    if (sample.pageScrollHeight > sample.pageClientHeight) {
+      throw new Error(`第 ${index + 1} 页导出画布发生纵向溢出`);
+    }
+    if (sample.bodyScrollHeight > sample.bodyClientHeight) {
+      throw new Error(`第 ${index + 1} 页导出正文发生纵向溢出`);
+    }
     const intersects = !(
       wordmarkRect.left >= bodyRect.right ||
       wordmarkRect.right <= bodyRect.left ||
@@ -379,6 +425,36 @@ async function desktopFlow(browser, browserMessages) {
       throw new Error(`第 ${index + 1} 页文学社标识与正文区域重叠`);
     }
   });
+  if (generationProbe.createdUrls.length !== pageCount) {
+    throw new Error("首次生成没有为每页创建可撤销的预览 URL");
+  }
+  if (generationProbe.revokedUrls.length !== 0) {
+    throw new Error("仍在显示的预览 URL 被提前撤销");
+  }
+  assert.deepEqual(
+    generationProbe.renderedUnits
+      .filter((unit) => unit.className === "export-paragraph")
+      .map((unit) => unit.text),
+    publishedParagraphs,
+  );
+
+  const firstPreviewUrls = generationProbe.createdUrls;
+  await page.getByRole("button", { name: "生成作品图片" }).click();
+  await page.waitForFunction(
+    (minimum) => window.__exportProbe.createdUrls.length >= minimum,
+    pageCount * 2,
+    { timeout: 30000 },
+  );
+  const regenerationProbe = await page.evaluate((firstUrls) => ({
+    createdUrls: [...window.__exportProbe.createdUrls],
+    revokedFirstPreviewUrls: firstUrls.every((url) =>
+      window.__exportProbe.revokedUrls.includes(url),
+    ),
+  }), firstPreviewUrls);
+  if (!regenerationProbe.revokedFirstPreviewUrls) {
+    throw new Error("重新生成前没有撤销上一批预览 URL");
+  }
+  const currentPreviewUrls = regenerationProbe.createdUrls.slice(-pageCount);
 
   const downloadPromise = page.waitForEvent("download", { timeout: 10000 });
   await perPageButtons.first().click();
@@ -400,11 +476,8 @@ async function desktopFlow(browser, browserMessages) {
   if (deliveryProbe.anchorClicks !== 1) {
     throw new Error("第二次明确点击没有同步调用下载锚点");
   }
-  if (
-    deliveryProbe.createdUrls.length !== 1 ||
-    deliveryProbe.revokedUrls.length !== 1 ||
-    deliveryProbe.createdUrls[0] !== deliveryProbe.revokedUrls[0]
-  ) {
+  const downloadUrl = deliveryProbe.createdUrls.at(-1);
+  if (!downloadUrl || !deliveryProbe.revokedUrls.includes(downloadUrl)) {
     throw new Error("下载完成后没有撤销临时 Blob URL");
   }
   if (deliveryProbe.temporaryAnchors !== 0) {
@@ -412,6 +485,15 @@ async function desktopFlow(browser, browserMessages) {
   }
 
   await goToHash(page, "#/works/work-river", "河流向北");
+  const routeCleanupProbe = await page.evaluate((previewUrls) => ({
+    previewsRemaining: document.querySelectorAll(".export-preview-image").length,
+    allRevoked: previewUrls.every((url) =>
+      window.__exportProbe.revokedUrls.includes(url),
+    ),
+  }), currentPreviewUrls);
+  if (routeCleanupProbe.previewsRemaining !== 0 || !routeCleanupProbe.allRevoked) {
+    throw new Error("切换作品路由后没有清理预览 URL 和预览节点");
+  }
   if (await page.getByRole("button", { name: "删除作品" }).count()) {
     throw new Error("普通成员看到了他人作品删除入口");
   }
@@ -447,7 +529,7 @@ async function desktopFlow(browser, browserMessages) {
   await expectVisible(page.getByRole("button", { name: "删除作品" }), "管理员删除入口");
 
   await context.close();
-  return { homeScreenshot, readingScreenshot };
+  return { homeScreenshot, readingScreenshot, exportPreviewScreenshot };
 }
 
 async function mobileFlow(browser, browserMessages) {
@@ -475,6 +557,38 @@ async function mobileFlow(browser, browserMessages) {
   if ((await mobileCard.count()) !== 1) {
     throw new Error("390×844 移动首页没有且仅有一张作品卡片");
   }
+  const bottomNavigation = page.locator(".mobile-bottom-nav");
+  await expectVisible(bottomNavigation, "移动端底部导航");
+  const bottomLinks = bottomNavigation.locator("a");
+  assert.deepEqual(await bottomLinks.allTextContents(), ["翻阅", "讨论", "写作", "我的"]);
+  assert.deepEqual(
+    await bottomLinks.evaluateAll((links) => links.map((link) => link.getAttribute("href"))),
+    ["#/", "#/discussions", "#/write", "#/"],
+  );
+
+  const categoryStrip = page.getByRole("navigation", { name: "作品分类" });
+  await expectVisible(categoryStrip, "移动端横向分类栏");
+  const categoryButtons = categoryStrip.locator("button");
+  assert.deepEqual(await categoryButtons.allTextContents(), [
+    "全部",
+    "新诗",
+    "旧诗",
+    "散文",
+    "小说",
+    "随笔",
+    "其他",
+  ]);
+  const categoryScroll = await categoryStrip.evaluate((strip) => ({
+    scrollWidth: strip.scrollWidth,
+    clientWidth: strip.clientWidth,
+  }));
+  if (categoryScroll.scrollWidth <= categoryScroll.clientWidth) {
+    throw new Error("390×844 移动分类栏不能横向滚动");
+  }
+  if (await page.locator('.mobile-home select[name="sort"]').count()) {
+    throw new Error("移动首页仍显示会误导用户的排序控件");
+  }
+
   const firstWorkId = await mobileCard.getAttribute("data-work-id");
   const authorKeyResult = await mobileCard
     .locator(".mobile-work-byline a")
@@ -499,6 +613,13 @@ async function mobileFlow(browser, browserMessages) {
     throw new Error("作品卡片劫持了作者链接的键盘事件");
   }
 
+  const startHash = new URL(page.url()).hash;
+  await dispatchTouchSwipe(mobileCard, 70, 180);
+  await mobileCard.locator(".mobile-work-copy").click();
+  if (new URL(page.url()).hash !== startHash) {
+    throw new Error("队列起点的右滑没有消费随后产生的点击");
+  }
+
   await dispatchTouchSwipe(mobileCard, 320, 220);
   await page.waitForFunction(
     (workId) =>
@@ -508,6 +629,10 @@ async function mobileFlow(browser, browserMessages) {
   const nextWorkId = await mobileCard.getAttribute("data-work-id");
   if (!nextWorkId || nextWorkId === firstWorkId) {
     throw new Error("向左滑动没有进入下一篇作品");
+  }
+  await mobileCard.locator(".mobile-work-copy").click();
+  if (new URL(page.url()).hash !== startHash) {
+    throw new Error("成功左滑后没有消费随后产生的点击");
   }
 
   await dispatchTouchSwipe(mobileCard, 70, 170);
@@ -519,10 +644,76 @@ async function mobileFlow(browser, browserMessages) {
   if ((await mobileCard.getAttribute("data-work-id")) !== firstWorkId) {
     throw new Error("向右滑动没有返回上一篇作品");
   }
-
-  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
   await mobileCard.locator(".mobile-work-copy").click();
-  await page.waitForURL(new RegExp(`#\\/works\\/${firstWorkId}$`));
+  if (new URL(page.url()).hash !== startHash) {
+    throw new Error("成功右滑后没有消费随后产生的点击");
+  }
+
+  await mobileCard.dispatchEvent("touchstart", {
+    touches: [{ identifier: 2, clientX: 320, clientY: 360 }],
+  });
+  await mobileCard.dispatchEvent("touchcancel", {
+    touches: [],
+    changedTouches: [{ identifier: 2, clientX: 210, clientY: 362 }],
+  });
+  await mobileCard.dispatchEvent("touchend", {
+    touches: [],
+    changedTouches: [{ identifier: 2, clientX: 210, clientY: 362 }],
+  });
+  if ((await mobileCard.getAttribute("data-work-id")) !== firstWorkId) {
+    throw new Error("touchcancel 后仍错误切换了作品");
+  }
+
+  await categoryButtons.filter({ hasText: /^散文$/ }).click();
+  await page.waitForFunction(
+    () =>
+      document.querySelector(".mobile-work-category span")?.textContent === "散文",
+  );
+  const resetPrevious = page.getByRole("button", { name: "← 上一篇" });
+  if (!(await resetPrevious.isDisabled())) {
+    throw new Error("切换移动分类后没有把作品队列重置到起点");
+  }
+  await page.getByRole("button", { name: "全部", exact: true }).click();
+  await page.waitForFunction(
+    () =>
+      document.querySelector('.mobile-category-strip button[aria-pressed="true"]')
+        ?.textContent === "全部",
+  );
+
+  let endNextButton = page.getByRole("button", { name: "下一篇 →" });
+  let safety = 0;
+  while (!(await endNextButton.isDisabled()) && safety < 20) {
+    const beforeId = await mobileCard.getAttribute("data-work-id");
+    await endNextButton.click();
+    await page.waitForFunction(
+      (workId) =>
+        document.querySelector("[data-mobile-work-card]")?.dataset.workId !== workId,
+      beforeId,
+    );
+    endNextButton = page.getByRole("button", { name: "下一篇 →" });
+    safety += 1;
+  }
+  if (!(await endNextButton.isDisabled())) {
+    throw new Error("移动作品队列没有在预期范围内到达末篇");
+  }
+  const lastWorkId = await mobileCard.getAttribute("data-work-id");
+  await dispatchTouchSwipe(mobileCard, 320, 210);
+  await mobileCard.locator(".mobile-work-copy").click();
+  if (
+    new URL(page.url()).hash !== startHash ||
+    (await mobileCard.getAttribute("data-work-id")) !== lastWorkId
+  ) {
+    throw new Error("队列末篇的左滑没有消费点击或错误改变了作品");
+  }
+  let startPreviousButton = page.getByRole("button", { name: "← 上一篇" });
+  while (!(await startPreviousButton.isDisabled())) {
+    await startPreviousButton.click();
+    startPreviousButton = page.getByRole("button", { name: "← 上一篇" });
+  }
+
+  const navigationWorkId = await mobileCard.getAttribute("data-work-id");
+  await mobileCard.locator(".mobile-work-copy").click();
+  await page.waitForURL(new RegExp(`#\\/works\\/${navigationWorkId}$`));
   await page.goBack();
   await page.waitForURL(/#\/$|\/$/);
   await expectVisible(page.locator("[data-mobile-work-card]"), "返回后的移动作品卡片");
@@ -553,7 +744,7 @@ async function mobileFlow(browser, browserMessages) {
   await expectVisible(page.getByRole("button", { name: /菜单/ }), "移动菜单按钮");
   await page.getByRole("button", { name: /菜单/ }).click();
   await expectVisible(
-    page.getByRole("link", { name: "讨论", exact: true }),
+    page.locator(".primary-nav").getByRole("link", { name: "讨论", exact: true }),
     "移动端讨论导航",
   );
   const homeScreenshot = await page.screenshot({ fullPage: true });
@@ -609,6 +800,10 @@ async function mobileFlow(browser, browserMessages) {
     writeFileSync(
       path.join(screenshots, "mobile-reading.png"),
       mobileScreenshots.readingScreenshot,
+    );
+    writeFileSync(
+      path.join(screenshots, "export-preview.png"),
+      desktopScreenshots.exportPreviewScreenshot,
     );
     console.log("Browser checks passed: desktop and mobile flows verified.");
   } finally {

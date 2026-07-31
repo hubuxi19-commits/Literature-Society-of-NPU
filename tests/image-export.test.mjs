@@ -33,9 +33,22 @@ test("散文按段落拆分", () => {
     splitExportUnits("第一段。\n\n第二段。", "散文"),
     [
       { type: "paragraph", text: "第一段。" },
+      { type: "space", text: "\n\n" },
       { type: "paragraph", text: "第二段。" },
     ],
   );
+});
+
+test("散文保留段内换行与段间空行", () => {
+  const content = "第一行\n第二行\n\n第三段\n仍在第三段";
+  const units = splitExportUnits(content, "散文");
+
+  assert.deepEqual(units, [
+    { type: "paragraph", text: "第一行\n第二行" },
+    { type: "space", text: "\n\n" },
+    { type: "paragraph", text: "第三段\n仍在第三段" },
+  ]);
+  assert.equal(units.map((unit) => unit.text).join(""), content);
 });
 
 test("分页不拆内容单元且不会生成空页", () => {
@@ -66,9 +79,52 @@ test("超高散文段落按字符边界拆分且不丢字", () => {
   assert.equal(pages.flat().map((unit) => unit.text).join(""), units[0].text);
 });
 
-test("诗歌行即使超高也不会拆分", () => {
+test("诗歌行无法完整排入单页时返回清晰错误", () => {
   const unit = { type: "line", text: "不可拆的一整行" };
-  assert.deepEqual(paginateExportUnits([unit], () => 200, 80), [[unit]]);
+  assert.throws(
+    () => paginateExportUnits([unit], () => 200, 80),
+    /诗行.*无法完整排入单页/,
+  );
+});
+
+test("每一张导出页编码前都检查页面和正文溢出", async () => {
+  const exporter = await import("../js/image-export.mjs");
+  assert.equal(typeof exporter.assertExportPageFits, "function");
+
+  const fittingBody = { scrollHeight: 1200, clientHeight: 1200 };
+  const fittingPage = {
+    scrollHeight: 1920,
+    clientHeight: 1920,
+    querySelector() {
+      return fittingBody;
+    },
+  };
+  assert.doesNotThrow(() => exporter.assertExportPageFits(fittingPage, 0));
+
+  assert.throws(
+    () =>
+      exporter.assertExportPageFits(
+        {
+          ...fittingPage,
+          scrollHeight: 1921,
+        },
+        1,
+      ),
+    /第 2 页.*超出导出画布/,
+  );
+  assert.throws(
+    () =>
+      exporter.assertExportPageFits(
+        {
+          ...fittingPage,
+          querySelector() {
+            return { scrollHeight: 1201, clientHeight: 1200 };
+          },
+        },
+        2,
+      ),
+    /第 3 页.*正文超出可用区域/,
+  );
 });
 
 test("空内容不会生成空页", () => {

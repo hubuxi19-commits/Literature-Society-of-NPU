@@ -296,33 +296,7 @@ npm test
 - `screenshots/desktop-reading.png`
 - `screenshots/mobile-home.png`
 
-## 上传 GitHub
-
-项目已经是独立 Git 仓库，并使用 `codex/literature-community-redesign` 功能分支。创建一个空的 GitHub 仓库后运行：
-
-```bash
-git remote add origin https://github.com/YOUR_ACCOUNT/YOUR_REPOSITORY.git
-git push -u origin codex/literature-community-redesign
-```
-
-在 GitHub 创建 Pull Request，将该分支合并到 `main`。如果个人仓库不使用 Pull Request，也可以在本地合并：
-
-```bash
-git switch main
-git merge --no-ff codex/literature-community-redesign
-git push -u origin main
-```
-
-上传前再次确认仓库中没有服务端密钥：
-
-```bash
-git grep -n -i "service_role"
-git status
-```
-
-文档会出现 `service_role` 这个警示词；代码和配置中不得出现真实值。
-
-### 发布本次改版
+## 发布本次改版
 
 仅在代码评审批准、上述 Supabase 迁移及验证查询已由负责人员在正确项目完成后，才从**主工作区（primary checkout）**发布。本节命令不得在链接工作树 `.worktrees/mobile-feed-export` 中执行；该工作树承载待集成的 `codex/mobile-feed-export` 功能分支。
 
@@ -339,6 +313,8 @@ git push origin main
 ```
 
 `git merge --ff-only` 若不能快进会停止，不应以强制合并绕过它；先处理分支历史或按评审意见更新后再发布。测试或检查失败时不要推送。不要在迁移尚未确认时推送，也不要将 `service_role`、数据库密码或管理令牌带入提交。上述是未来的发布步骤，不表示合并、迁移或推送已经发生。
+
+文档会出现 `service_role` 这个警示词；代码和配置中不得出现真实值。
 
 ## 启用 GitHub Pages
 
