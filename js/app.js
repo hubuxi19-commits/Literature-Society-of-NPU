@@ -1,6 +1,10 @@
 import { config } from "./config.mjs";
 import { createDataService } from "./data-service.mjs";
 import {
+  createMobileFeedController,
+  resolveHorizontalSwipe,
+} from "./mobile-feed.mjs";
+import {
   buildCommentTree,
   CATEGORIES,
   countChineseText,
@@ -38,6 +42,12 @@ const state = {
     query: "",
     category: "全部",
     sort: "latest",
+  },
+  mobileFeed: {
+    controller: null,
+    signature: "",
+    touch: null,
+    suppressClick: false,
   },
   confirmResolver: null,
   toastTimer: null,
@@ -458,8 +468,8 @@ function renderCommunityRail() {
   return rail;
 }
 
-function renderHome() {
-  const shell = element("div", { className: "page-shell" });
+function renderDesktopHome() {
+  const shell = element("div", { className: "page-shell desktop-home" });
   const note = state.settings?.editor_note ?? {
     title: "把写下的交给彼此",
     body: "这里持续收录社员的新作，也保留认真、具体、彼此尊重的讨论。",
@@ -581,6 +591,258 @@ function renderHome() {
 
   shell.append(hero, editorial, leadGrid, createFilterBand(), content);
   replaceContent(app, shell);
+}
+
+function buildMobileFeedSignature(works) {
+  return JSON.stringify([
+    state.filters.category,
+    state.filters.query,
+    state.filters.sort,
+    works.map((work) => work.id),
+  ]);
+}
+
+function truncatePoetryForCard(content, limit = 280) {
+  const characters = Array.from(String(content ?? "").trim());
+  if (characters.length <= limit) return characters.join("");
+  return `${characters.slice(0, limit).join("")}\n……`;
+}
+
+function moveMobileFeed(direction) {
+  const controller = state.mobileFeed.controller;
+  if (!controller) return false;
+  const currentId = controller.current()?.id;
+  const work =
+    direction === "next" ? controller.next() : controller.previous();
+  if (!work || work.id === currentId) return false;
+  renderMobileHome();
+  window.requestAnimationFrame(() => {
+    document.querySelector("[data-mobile-work-card]")?.focus({
+      preventScroll: true,
+    });
+  });
+  return true;
+}
+
+function attachMobileFeedInteractions(card, work) {
+  card.addEventListener("click", (event) => {
+    if (state.mobileFeed.suppressClick) {
+      event.preventDefault();
+      return;
+    }
+    if (
+      event.target instanceof Element &&
+      event.target.closest("a, button")
+    ) {
+      return;
+    }
+    window.location.hash = `#/works/${encodeURIComponent(work.id)}`;
+  });
+
+  card.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+      event.preventDefault();
+      moveMobileFeed(event.key === "ArrowRight" ? "next" : "previous");
+    } else if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      window.location.hash = `#/works/${encodeURIComponent(work.id)}`;
+    }
+  });
+
+  card.addEventListener(
+    "touchstart",
+    (event) => {
+      const touch = event.touches[0];
+      if (!touch) return;
+      state.mobileFeed.touch = {
+        startX: touch.clientX,
+        startY: touch.clientY,
+        endX: touch.clientX,
+        endY: touch.clientY,
+      };
+    },
+    { passive: true },
+  );
+
+  card.addEventListener(
+    "touchmove",
+    (event) => {
+      const touch = event.touches[0];
+      if (!touch || !state.mobileFeed.touch) return;
+      state.mobileFeed.touch.endX = touch.clientX;
+      state.mobileFeed.touch.endY = touch.clientY;
+    },
+    { passive: true },
+  );
+
+  card.addEventListener(
+    "touchend",
+    (event) => {
+      const gesture = state.mobileFeed.touch;
+      const touch = event.changedTouches[0];
+      state.mobileFeed.touch = null;
+      if (!gesture) return;
+      const deltaX = (touch?.clientX ?? gesture.endX) - gesture.startX;
+      const deltaY = (touch?.clientY ?? gesture.endY) - gesture.startY;
+      const direction = resolveHorizontalSwipe(deltaX, deltaY);
+      if (!direction || !moveMobileFeed(direction)) return;
+      state.mobileFeed.suppressClick = true;
+      window.requestAnimationFrame(() => {
+        state.mobileFeed.suppressClick = false;
+      });
+    },
+    { passive: true },
+  );
+}
+
+function createMobileWorkCard(work) {
+  const poetry = isPoetryCategory(work.category);
+  const card = element("article", {
+    className: "mobile-work-card",
+    id: "mobile-work-card",
+    dataset: {
+      mobileWorkCard: "",
+      workId: work.id,
+    },
+    attrs: {
+      tabindex: "0",
+      role: "link",
+      "aria-label": `阅读《${work.title}》`,
+    },
+  });
+  const categoryLine = element("div", { className: "mobile-work-category" }, [
+    element("span", { text: normalizeCategory(work.category) }),
+    work.is_featured
+      ? element("span", { className: "mobile-featured-mark", text: "编辑推荐" })
+      : null,
+  ]);
+  const heading = element("h2");
+  heading.append(
+    element("a", {
+      href: `#/works/${encodeURIComponent(work.id)}`,
+      text: work.title,
+    }),
+  );
+  const author = element("a", {
+    href: `#/authors/${encodeURIComponent(work.author_id)}`,
+    text: work.author_pen_name,
+  });
+  const copy = poetry
+    ? truncatePoetryForCard(work.content)
+    : work.excerpt || createExcerpt(work.content, 180);
+
+  card.append(
+    categoryLine,
+    heading,
+    element("div", { className: "mobile-work-byline" }, [
+      author,
+      element("span", { text: formatDate(work.created_at) }),
+    ]),
+    element("p", {
+      className: `mobile-work-copy ${
+        poetry ? "mobile-work-copy--poetry" : "mobile-work-copy--prose"
+      }`,
+      text: copy,
+    }),
+    element("div", { className: "mobile-work-footer" }, [
+      element("span", { text: `喜欢 ${work.like_count}` }),
+      element("span", { text: `讨论 ${work.comment_count}` }),
+      element("span", { text: "轻触阅读全文" }),
+    ]),
+  );
+  attachMobileFeedInteractions(card, work);
+  return card;
+}
+
+function renderMobileHome() {
+  const filtered = filterAndSortWorks(state.works, state.filters);
+  const signature = buildMobileFeedSignature(filtered);
+  if (!state.mobileFeed.controller) {
+    state.mobileFeed.controller = createMobileFeedController(filtered);
+    state.mobileFeed.signature = signature;
+  } else if (signature !== state.mobileFeed.signature) {
+    state.mobileFeed.controller.reset(filtered);
+    state.mobileFeed.signature = signature;
+  }
+
+  const shell = element("div", { className: "page-shell mobile-home" });
+  const masthead = element("header", { className: "mobile-feed-masthead" }, [
+    element("p", { className: "eyebrow", text: "ONE PAGE · ONE VOICE" }),
+    element("h1", { id: "home-title", text: "让作品被读见" }),
+    element("p", { text: "左右轻扫换一篇，向上滑动仍可浏览页面。" }),
+  ]);
+  const filterPanel = element("details", {
+    className: "mobile-feed-filters",
+  });
+  filterPanel.append(
+    element("summary", { text: "搜索与筛选作品" }),
+    createFilterBand(),
+  );
+  const stage = element("section", {
+    className: "mobile-feed-stage",
+    attrs: {
+      "aria-label": "移动作品推荐",
+      "aria-live": "polite",
+    },
+  });
+  const current = state.mobileFeed.controller.current();
+
+  if (current) {
+    stage.append(
+      element("div", { className: "mobile-feed-rule" }, [
+        element("span", { text: "文苑稿页" }),
+        element("span", { text: "横向滑动翻页" }),
+      ]),
+      createMobileWorkCard(current),
+      element(
+        "nav",
+        {
+          className: "mobile-feed-controls",
+          attrs: { "aria-label": "切换作品" },
+        },
+        [
+          element("button", {
+            className: "mobile-feed-control",
+            type: "button",
+            text: "← 上一篇",
+            dataset: { action: "mobile-feed-previous" },
+            attrs: { "aria-controls": "mobile-work-card" },
+          }),
+          element("button", {
+            className: "mobile-feed-control",
+            type: "button",
+            text: "下一篇 →",
+            dataset: { action: "mobile-feed-next" },
+            attrs: { "aria-controls": "mobile-work-card" },
+          }),
+        ],
+      ),
+    );
+  } else {
+    stage.append(
+      element("div", { className: "empty-state" }, [
+        element("h2", { text: "没有找到对应作品" }),
+        element("p", { text: "换一个关键词或分类，再试一次。" }),
+        element("button", {
+          className: "secondary-button",
+          type: "button",
+          text: "清除筛选",
+          dataset: { action: "reset-filters" },
+        }),
+      ]),
+    );
+  }
+
+  shell.append(masthead, filterPanel, stage);
+  replaceContent(app, shell);
+}
+
+function renderHome() {
+  if (window.matchMedia("(max-width: 760px)").matches) {
+    renderMobileHome();
+    return;
+  }
+  renderDesktopHome();
 }
 
 function createPageHeader(eyebrow, title, description) {
@@ -1315,6 +1577,7 @@ async function renderCurrentRoute() {
 
 async function refreshWorks() {
   state.works = await service.listWorks();
+  state.mobileFeed.signature = "";
 }
 
 async function refreshDiscussionsPreview() {
@@ -1460,6 +1723,10 @@ document.addEventListener("click", async (event) => {
   } else if (action === "reset-filters") {
     state.filters = { query: "", category: "全部", sort: "latest" };
     renderHome();
+  } else if (action === "mobile-feed-previous") {
+    moveMobileFeed("previous");
+  } else if (action === "mobile-feed-next") {
+    moveMobileFeed("next");
   } else if (action === "retry-route") {
     await initialize();
   } else if (action === "toggle-like") {

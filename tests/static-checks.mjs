@@ -50,3 +50,50 @@ test("样式包含视觉令牌、键盘焦点、减少动效和移动端断点",
   assert.match(css, /prefers-reduced-motion/);
   assert.match(css, /@media\s*\(max-width:\s*768px\)/);
 });
+
+test("移动首页使用独立队列、可访问卡片与被动触摸手势", async () => {
+  const app = await readFile(new URL("../js/app.js", import.meta.url), "utf8");
+  assert.match(app, /from\s+"\.\/mobile-feed\.mjs"/);
+  assert.match(app, /mobileFeed:\s*\{[\s\S]*?controller:\s*null/);
+  assert.match(app, /function\s+renderMobileHome\s*\(/);
+  assert.match(
+    app,
+    /matchMedia\("\(max-width:\s*760px\)"\)\.matches/,
+  );
+  assert.match(app, /mobileWorkCard:\s*""/);
+  assert.match(app, /tabindex:\s*"0"/);
+  assert.match(
+    app,
+    /addEventListener\(\s*"touchstart"[\s\S]*?passive:\s*true/,
+  );
+  assert.match(
+    app,
+    /addEventListener\(\s*"touchmove"[\s\S]*?passive:\s*true/,
+  );
+  assert.match(
+    app,
+    /addEventListener\(\s*"touchend"[\s\S]*?passive:\s*true/,
+  );
+  assert.match(app, /resolveHorizontalSwipe\(/);
+  assert.match(app, /mobileFeed\.suppressClick\s*=\s*true/);
+  assert.match(app, /requestAnimationFrame\(/);
+});
+
+test("移动首页样式提供单卡纸页舞台并保留纵向滚动", async () => {
+  const css = await readFile(
+    new URL("../assets/styles.css", import.meta.url),
+    "utf8",
+  );
+  assert.match(css, /--mobile-nav-height:/);
+  assert.match(css, /@media\s*\(max-width:\s*760px\)/);
+  assert.match(
+    css,
+    /mobile-feed-stage[\s\S]*?min-height:\s*calc\(100svh\s*-\s*var\(--mobile-nav-height\)\)/,
+  );
+  assert.match(
+    css,
+    /mobile-work-card[\s\S]*?touch-action:\s*pan-y/,
+  );
+  assert.match(css, /mobile-work-copy--poetry[\s\S]*?white-space:\s*pre-wrap/);
+  assert.match(css, /mobile-feed-control[\s\S]*?min-height:\s*44px/);
+});
