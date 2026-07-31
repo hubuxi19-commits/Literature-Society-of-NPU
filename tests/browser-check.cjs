@@ -4,6 +4,20 @@ const { chromium } = require("playwright");
 
 const baseUrl = "http://127.0.0.1:4173";
 const screenshots = path.resolve(__dirname, "..", "screenshots");
+const demoConfigModule = `export const config = {
+  mode: "demo",
+  supabaseUrl: "",
+  supabaseAnonKey: "",
+};\n`;
+
+async function useDemoConfig(page) {
+  await page.route(`${baseUrl}/js/config.mjs`, (route) =>
+    route.fulfill({
+      contentType: "application/javascript",
+      body: demoConfigModule,
+    }),
+  );
+}
 
 async function expectVisible(locator, label) {
   await locator.waitFor({ state: "visible" });
@@ -45,6 +59,7 @@ async function desktopFlow(browser, browserMessages) {
     reducedMotion: "reduce",
   });
   const page = await context.newPage();
+  await useDemoConfig(page);
   page.setDefaultTimeout(8000);
   page.on("console", (message) => {
     if (message.type() === "error") {
@@ -237,6 +252,7 @@ async function mobileFlow(browser, browserMessages) {
     deviceScaleFactor: 1,
   });
   const page = await context.newPage();
+  await useDemoConfig(page);
   page.setDefaultTimeout(8000);
   page.on("console", (message) => {
     if (message.type() === "error") {
