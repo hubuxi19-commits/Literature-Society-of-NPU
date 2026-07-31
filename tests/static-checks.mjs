@@ -113,3 +113,28 @@ test("移动首页样式提供单卡纸页舞台并保留纵向滚动", async ()
   assert.match(css, /mobile-work-copy--poetry[\s\S]*?white-space:\s*pre-wrap/);
   assert.match(css, /mobile-feed-control[\s\S]*?min-height:\s*44px/);
 });
+
+test("阅读页通过本地素笺模板生成 1080×1920 PNG", async () => {
+  const [app, exporter, css] = await Promise.all([
+    readFile(new URL("../js/app.js", import.meta.url), "utf8"),
+    readFile(new URL("../js/image-export.mjs", import.meta.url), "utf8"),
+    readFile(new URL("../assets/styles.css", import.meta.url), "utf8"),
+  ]);
+  const publicSource = `${app}\n${exporter}`;
+
+  assert.match(app, /data(?:set)?:\s*\{\s*action:\s*"export-work"/);
+  assert.match(app, /text:\s*"生成作品图片"/);
+  assert.match(exporter, /student-literature-society-wordmark\.png/);
+  assert.match(exporter, /canvas\.toBlob\(/);
+  assert.match(exporter, /`保存第 \$\{index \+ 1\} 页`/);
+  assert.match(css, /\.export-page[\s\S]*?width:\s*1080px/);
+  assert.match(css, /\.export-page[\s\S]*?height:\s*1920px/);
+  assert.match(css, /\.export-wordmark[\s\S]*?width:\s*30%/);
+  assert.match(css, /\.export-wordmark[\s\S]*?right:\s*64px/);
+  assert.match(css, /\.export-wordmark[\s\S]*?bottom:\s*64px/);
+  assert.doesNotMatch(publicSource, /service_role/i);
+  assert.doesNotMatch(
+    publicSource,
+    /(?:openai|stability|replicate|midjourney|image[-_ ]?generation)[^\n]{0,80}(?:api|endpoint|fetch)/i,
+  );
+});

@@ -1,4 +1,4 @@
-const { mkdirSync } = require("node:fs");
+const { copyFileSync, mkdirSync, readFileSync } = require("node:fs");
 const path = require("node:path");
 const { chromium } = require("playwright");
 
@@ -149,6 +149,106 @@ async function desktopFlow(browser, browserMessages) {
     )) !== "none"
   ) {
     throw new Error("诗歌首字不应浮动放大");
+  }
+  const exportButton = page.getByRole("button", { name: "生成作品图片" });
+  await expectVisible(exportButton, "作品图片生成入口");
+  const downloadPromise = page.waitForEvent("download", { timeout: 20000 });
+  await exportButton.click();
+  let download;
+  try {
+    download = await downloadPromise;
+  } catch (error) {
+    const diagnostic = await page.evaluate(() => ({
+      buttonText: document.querySelector('[data-action="export-work"]')?.textContent,
+      buttonDisabled: document.querySelector('[data-action="export-work"]')?.disabled,
+      exportRootCount: document.querySelectorAll(".export-render-root").length,
+      toastText: document.querySelector("#toast")?.textContent,
+      toastHidden: document.querySelector("#toast")?.hidden,
+    }));
+    throw new Error(
+      `等待 PNG 下载超时：${JSON.stringify(diagnostic)}；${error.message}`,
+    );
+  }
+  const downloadPath = await download.path();
+  const png = readFileSync(downloadPath);
+  if (!png.subarray(1, 4).equals(Buffer.from("PNG"))) {
+    throw new Error("导出文件不是 PNG 图片");
+  }
+  const exportedWidth = png.readUInt32BE(16);
+  const exportedHeight = png.readUInt32BE(20);
+  if (exportedWidth !== 1080 || exportedHeight !== 1920) {
+    throw new Error(
+      `导出尺寸错误：${exportedWidth}×${exportedHeight}`,
+    );
+  }
+  if (!download.suggestedFilename().endsWith(".png")) {
+    throw new Error("导出文件名缺少 PNG 扩展名");
+  }
+  copyFileSync(downloadPath, path.join(screenshots, "export-work-night-bus.png"));
+  await page.getByRole("button", { name: "生成作品图片" }).waitFor();
+
+  const multiPageResult = await page.evaluate(async () => {
+    const { exportWorkImages } = await import("./js/image-export.mjs");
+    const host = document.querySelector(".export-results-host");
+    const originalAnchorClick = HTMLAnchorElement.prototype.click;
+    let automaticDownloadCount = 0;
+    HTMLAnchorElement.prototype.click = function recordDownload() {
+      automaticDownloadCount += 1;
+    };
+
+    try {
+      const result = await exportWorkImages(
+        {
+          id: "browser-multipage",
+          title: "多页保存检查",
+          author_pen_name: "自动化",
+          category: "散文",
+          created_at: "2026-07-31T00:00:00+08:00",
+          content: Array.from(
+            { length: 24 },
+            (_, index) => `第${index + 1}段用于检查分页后仍能逐页保存。`,
+          ).join("\n\n"),
+        },
+        { navigator: {}, resultsContainer: host },
+      );
+      const bitmap = await createImageBitmap(result.blobs[0]);
+      const dimensions = { width: bitmap.width, height: bitmap.height };
+      bitmap.close();
+      return {
+        automaticDownloadCount,
+        blobCount: result.blobs.length,
+        buttonLabels: [...host.querySelectorAll("button")].map(
+          (button) => button.textContent,
+        ),
+        dimensions,
+        renderRoots: document.querySelectorAll(".export-render-root").length,
+      };
+    } finally {
+      HTMLAnchorElement.prototype.click = originalAnchorClick;
+    }
+  });
+  if (multiPageResult.blobCount < 2) {
+    throw new Error("长文没有生成多页图片");
+  }
+  if (multiPageResult.automaticDownloadCount !== multiPageResult.blobCount) {
+    throw new Error("多页图片没有按页尝试自动下载");
+  }
+  if (multiPageResult.buttonLabels.length !== multiPageResult.blobCount) {
+    throw new Error("多页下载缺少逐页保存按钮");
+  }
+  multiPageResult.buttonLabels.forEach((label, index) => {
+    if (label !== `保存第 ${index + 1} 页`) {
+      throw new Error(`逐页保存按钮文案错误：${label}`);
+    }
+  });
+  if (
+    multiPageResult.dimensions.width !== 1080 ||
+    multiPageResult.dimensions.height !== 1920
+  ) {
+    throw new Error("多页 PNG 尺寸不正确");
+  }
+  if (multiPageResult.renderRoots !== 0) {
+    throw new Error("离屏导出节点没有清理");
   }
   await expectNoHorizontalOverflow(page, "桌面阅读页");
   await page.screenshot({

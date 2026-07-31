@@ -1,5 +1,6 @@
 import { config } from "./config.mjs";
 import { createDataService } from "./data-service.mjs";
+import { exportWorkImages } from "./image-export.mjs";
 import {
   createMobileFeedController,
   resolveHorizontalSwipe,
@@ -39,6 +40,7 @@ const state = {
   works: [],
   settings: null,
   discussions: [],
+  currentWork: null,
   filters: {
     query: "",
     category: "全部",
@@ -978,8 +980,10 @@ function createCommentItem(comment, workId, depth = 0) {
 
 async function renderWork(workId) {
   showLoading("正在展开作品");
+  state.currentWork = null;
   try {
     const work = await service.getWork(workId);
+    state.currentWork = work;
     const shell = element("div", { className: "reading-shell" });
     const head = element("header", { className: "reading-head" });
     const margin = element("aside", { className: "reading-margin" }, [
@@ -1028,6 +1032,14 @@ async function renderWork(workId) {
       }),
     );
     actionBar.append(likeButton);
+    actionBar.append(
+      element("button", {
+        className: "secondary-button export-work-button",
+        type: "button",
+        text: "生成作品图片",
+        dataset: { action: "export-work", workId: work.id },
+      }),
+    );
 
     if (userCanManage(work.author_id)) {
       const adminActions = element("div", { className: "admin-actions" });
@@ -1155,6 +1167,10 @@ async function renderWork(workId) {
       head,
       renderParagraphs(work.content, work.category),
       actionBar,
+      element("div", {
+        className: "export-results-host",
+        attrs: { "aria-live": "polite" },
+      }),
       authorNote,
       commentsBlock,
       relatedBlock,
@@ -1743,6 +1759,39 @@ document.addEventListener("click", async (event) => {
     await initialize();
   } else if (action === "toggle-like") {
     await handleLike(trigger);
+  } else if (action === "export-work") {
+    const work = state.currentWork;
+    if (!work || String(work.id) !== trigger.dataset.workId) {
+      showToast("作品内容已经变化，请刷新后重试。");
+      return;
+    }
+
+    const originalText = trigger.textContent;
+    trigger.disabled = true;
+    trigger.textContent = "正在生成…";
+    const resultsContainer = document.querySelector(".export-results-host");
+    resultsContainer?.replaceChildren();
+
+    try {
+      const result = await exportWorkImages(work, { resultsContainer });
+      if (result.canceled) {
+        showToast("已取消分享。");
+      } else if (result.shared) {
+        showToast("作品图片已交给系统分享。", "success");
+      } else if (result.blobs.length > 1) {
+        showToast(
+          `已生成 ${result.blobs.length} 页；若下载被拦截，可在下方逐页保存。`,
+          "success",
+        );
+      } else {
+        showToast("作品图片已生成并开始保存。", "success");
+      }
+    } catch (error) {
+      showToast(`作品图片没有生成：${error.message}`);
+    } finally {
+      trigger.disabled = false;
+      trigger.textContent = originalText;
+    }
   } else if (action === "toggle-reply") {
     const form = document.querySelector(
       `[data-reply-form="${CSS.escape(trigger.dataset.commentId)}"]`,

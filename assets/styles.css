@@ -861,6 +861,7 @@ main {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 1rem;
   width: min(100%, var(--reading-width));
   margin: 0 auto;
   padding: 1.5rem 0;
@@ -886,6 +887,137 @@ main {
 .admin-actions {
   display: flex;
   gap: 1rem;
+}
+
+.export-work-button:disabled {
+  cursor: wait;
+  opacity: 0.58;
+}
+
+.export-results-host {
+  width: min(100%, var(--reading-width));
+  margin: 0 auto;
+}
+
+.export-results {
+  padding: 1.2rem 0 1.5rem;
+  border-bottom: 1px solid var(--rule);
+}
+
+.export-results h3,
+.export-results p {
+  margin: 0;
+}
+
+.export-results h3 {
+  font-family: var(--serif-title);
+  font-size: 1.1rem;
+}
+
+.export-results p {
+  margin-top: 0.35rem;
+  color: var(--soft-ink);
+  font-size: 0.86rem;
+}
+
+.export-result-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem;
+  margin-top: 0.9rem;
+}
+
+/* “素笺”导出稿页固定使用 CSS 像素，必须置于响应式规则之外。 */
+.export-render-root {
+  position: fixed;
+  top: 0;
+  left: -20000px;
+  width: 1080px;
+  pointer-events: none;
+}
+
+.export-page {
+  position: relative;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) 400px;
+  gap: 56px;
+  box-sizing: border-box;
+  width: 1080px;
+  height: 1920px;
+  padding: 112px 96px 0;
+  overflow: hidden;
+  background: #f3eee3;
+  color: #24211d;
+  font-family: "Noto Serif SC", "Songti SC", SimSun, serif;
+}
+
+.export-title {
+  max-width: 11.5em;
+  margin: 0;
+  font-size: 72px;
+  font-weight: 800;
+  letter-spacing: -0.045em;
+  line-height: 1.2;
+}
+
+.export-body {
+  min-height: 0;
+  overflow: hidden;
+  font-size: 38px;
+  line-height: 1.9;
+  overflow-wrap: anywhere;
+}
+
+.export-line,
+.export-space,
+.export-paragraph {
+  box-sizing: border-box;
+  margin: 0;
+}
+
+.export-line,
+.export-space {
+  min-height: 72.2px;
+  white-space: pre-wrap;
+}
+
+.export-paragraph {
+  padding-bottom: 28px;
+  text-align: justify;
+  text-indent: 2em;
+}
+
+.export-footer {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-content: start;
+  gap: 32px;
+  padding-top: 32px;
+  border-top: 2px solid #cfc5b4;
+  color: #665f55;
+  font-family: "Noto Sans SC", "Microsoft YaHei", sans-serif;
+  font-size: 24px;
+  letter-spacing: 0.08em;
+}
+
+.export-author-date,
+.export-page-number {
+  display: block;
+}
+
+.export-page-number {
+  color: #8c2f2b;
+  font-variant-numeric: tabular-nums;
+}
+
+.export-wordmark {
+  position: absolute;
+  right: 64px;
+  bottom: 64px;
+  display: block;
+  width: 30%;
+  height: auto;
+  object-fit: contain;
 }
 
 .author-note,
