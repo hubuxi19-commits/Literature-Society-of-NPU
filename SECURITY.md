@@ -39,6 +39,7 @@
 - 删除评论通过受保护 RPC 进行软删除。
 - 编辑推荐通过管理员 RPC 修改。
 - `role` 不在普通成员可更新的列权限中。
+- `pen_name` 同样不在普通成员可更新的列权限中：迁移会撤销对该列的 `UPDATE` 权限，只授予 `bio` 和 `updated_at`。隐藏笔名输入框不是安全控制。
 
 上线前必须在真实 Supabase 项目中验证策略。仅检查前端按钮是否隐藏不构成权限测试。
 
@@ -47,7 +48,7 @@
 可以进入前端仓库：
 
 - Supabase Project URL。
-- Supabase `anon` 密钥。
+- Supabase `anon`（publishable）密钥。
 
 不得进入前端仓库：
 
@@ -56,6 +57,12 @@
 - Supabase Management API Token。
 - GitHub Personal Access Token。
 - 其他可以绕过 RLS 的凭据。
+
+`anon`/publishable 密钥可以出现在静态前端；它不绕过数据库权限。`service_role` 密钥绝不能出现在浏览器代码、前端配置、Git 历史、GitHub Pages 构建输入或截图中，因为它能绕过 RLS。每张业务表都必须持续启用 RLS；公开前端、隐藏界面入口或列级权限都不能替代各表的 RLS 策略。
+
+## 本地图片生成
+
+阅读页导出的作品图片在用户浏览器本地完成：离屏模板使用仓库内的 `assets/student-literature-society-wordmark.png`，再生成 PNG Blob 并由浏览器分享或下载。作品正文、作者资料和生成的图片不会上传到第三方图片生成、渲染或存储服务。此性质依赖当前前端实现；今后若增加远程渲染、分析或存储服务，必须先更新隐私说明、威胁模型和 RLS/访问控制审查。
 
 如果高权限密钥曾被提交到 Git：
 
