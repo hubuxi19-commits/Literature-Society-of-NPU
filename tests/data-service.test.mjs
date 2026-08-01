@@ -66,6 +66,18 @@ test("普通成员不能删除他人作品，管理员可以", async () => {
   await assert.rejects(() => admin.getWork("work-river"), /作品不存在/);
 });
 
+test("管理员推荐操作只返回推荐状态供前端本地更新", async () => {
+  const admin = createDataService({ mode: "demo" });
+  await admin.signIn({
+    studentNumber: "2023000001",
+    password: "editor88",
+  });
+
+  const result = await admin.setFeatured("work-river", false);
+  assert.deepEqual(result, { id: "work-river", is_featured: false });
+  assert.equal((await admin.getWork("work-river")).is_featured, false);
+});
+
 test("注册不会把学号写入公开资料且会话可以退出", async () => {
   const service = createDataService({ mode: "demo" });
   const session = await service.signUp({

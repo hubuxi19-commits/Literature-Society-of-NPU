@@ -293,6 +293,7 @@ async function desktopFlow(browser, browserMessages) {
           const wordmarkRect = wordmark.getBoundingClientRect();
           const style = getComputedStyle(wordmark);
           probe.layoutSamples.push({
+            hasTitle: Boolean(exportPage.querySelector(".export-title")),
             pageScrollHeight: exportPage.scrollHeight,
             pageClientHeight: exportPage.clientHeight,
             bodyScrollHeight: body.scrollHeight,
@@ -423,6 +424,12 @@ async function desktopFlow(browser, browserMessages) {
       throw new Error(`第 ${index + 1} 页文学社标识与正文区域重叠`);
     }
   });
+  if (!generationProbe.layoutSamples[0]?.hasTitle) {
+    throw new Error("导出第一页缺少作品标题");
+  }
+  if (generationProbe.layoutSamples.slice(1).some((sample) => sample.hasTitle)) {
+    throw new Error("导出续页不应重复显示作品标题");
+  }
   if (generationProbe.createdUrls.length !== pageCount) {
     throw new Error("首次生成没有为每页创建可撤销的预览 URL");
   }

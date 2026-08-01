@@ -1080,6 +1080,32 @@ function userCanManage(authorId) {
   );
 }
 
+function setFeaturedLocally(workId, featured) {
+  const normalizedId = String(workId);
+  const apply = (work) => {
+    if (work && String(work.id) === normalizedId) work.is_featured = featured;
+  };
+  state.works.forEach(apply);
+  apply(state.currentWork);
+
+  const button = document.querySelector(
+    `[data-action="toggle-featured"][data-work-id="${CSS.escape(normalizedId)}"]`,
+  );
+  if (button) {
+    button.dataset.featured = String(featured);
+    button.textContent = featured ? "取消推荐" : "设为推荐";
+    button.setAttribute("aria-pressed", String(featured));
+  }
+
+  const margin = document.querySelector(".reading-margin");
+  const marker = margin?.querySelector(".featured-mark");
+  if (featured && margin && !marker) {
+    margin.append(element("p", { className: "featured-mark", text: "编辑推荐" }));
+  } else if (!featured) {
+    marker?.remove();
+  }
+}
+
 function createCommentItem(comment, workId, depth = 0) {
   const item = element("li", {
     className: "comment-item",
@@ -1241,6 +1267,7 @@ async function renderWork(workId) {
               workId: work.id,
               featured: String(work.is_featured),
             },
+            attrs: { "aria-pressed": String(work.is_featured) },
           }),
         );
       }
@@ -2087,16 +2114,19 @@ document.addEventListener("click", async (event) => {
       }
     }
   } else if (action === "toggle-featured") {
+    const workId = trigger.dataset.workId;
+    const previous = trigger.dataset.featured === "true";
+    const next = !previous;
+    trigger.disabled = true;
+    setFeaturedLocally(workId, next);
     try {
-      await service.setFeatured(
-        trigger.dataset.workId,
-        trigger.dataset.featured !== "true",
-      );
-      await refreshWorks();
+      await service.setFeatured(workId, next);
       showToast("编辑推荐状态已更新。", "success");
-      await renderWork(trigger.dataset.workId);
     } catch (error) {
+      setFeaturedLocally(workId, previous);
       showToast(error.message);
+    } finally {
+      if (trigger.isConnected) trigger.disabled = false;
     }
   } else if (action === "cancel-confirm") {
     finishConfirmation(false);
