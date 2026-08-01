@@ -326,7 +326,7 @@ function createDemoService() {
       if (!work) throw new Error("作品不存在");
       work.is_featured = Boolean(featured);
       work.updated_at = new Date().toISOString();
-      return enrichWork(work);
+      return { id: work.id, is_featured: work.is_featured };
     },
   };
 
@@ -646,12 +646,15 @@ function createSupabaseService(config) {
     async setFeatured(workId, featured) {
       await requireRemoteSession();
       const client = await getClient();
-      const { error } = await client.rpc("set_work_featured", {
+      const { data, error } = await client.rpc("set_work_featured", {
         target_work_id: workId,
         featured: Boolean(featured),
       });
       if (error) throw new Error(error.message);
-      return service.getWork(workId);
+      return {
+        id: data?.id ?? workId,
+        is_featured: data?.is_featured ?? Boolean(featured),
+      };
     },
   };
 

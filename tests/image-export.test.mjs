@@ -64,6 +64,22 @@ test("分页不拆内容单元且不会生成空页", () => {
   ]);
 });
 
+test("分页从第二页开始使用续页正文高度", () => {
+  const units = [
+    { type: "line", text: "一" },
+    { type: "line", text: "二" },
+    { type: "line", text: "三" },
+    { type: "line", text: "四" },
+    { type: "line", text: "五" },
+  ];
+  const pages = paginateExportUnits(units, () => 40, 80, 160);
+
+  assert.deepEqual(pages.map((page) => page.map((unit) => unit.text)), [
+    ["一", "二"],
+    ["三", "四", "五"],
+  ]);
+});
+
 test("超高散文段落按字符边界拆分且不丢字", () => {
   const units = [{ type: "paragraph", text: "一二三四五六七八九" }];
   const pages = paginateExportUnits(

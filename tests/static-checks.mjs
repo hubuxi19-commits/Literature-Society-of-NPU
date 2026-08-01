@@ -185,6 +185,8 @@ test("阅读页通过本地素笺模板生成 1080×1920 PNG", async () => {
   );
   assert.match(exporter, /student-literature-society-wordmark\.png/);
   assert.match(exporter, /canvas\.toBlob\(/);
+  assert.match(exporter, /export-page--continuation/);
+  assert.match(exporter, /showTitle:\s*false/);
   assert.match(app, /`保存第 \$\{pageIndex \+ 1\} 页`/);
   const exportWorkBody = exporter.match(
     /export\s+async\s+function\s+exportWorkImages[\s\S]+?\n}\n/,
@@ -193,6 +195,7 @@ test("阅读页通过本地素笺模板生成 1080×1920 PNG", async () => {
   assert.doesNotMatch(exportWorkBody, /\.click\s*\(/);
   assert.match(css, /\.export-page[\s\S]*?width:\s*1080px/);
   assert.match(css, /\.export-page[\s\S]*?height:\s*1920px/);
+  assert.match(css, /\.export-page--continuation[\s\S]*?grid-template-rows:\s*minmax\(0,\s*1fr\)\s*400px/);
   assert.match(css, /\.export-wordmark[\s\S]*?width:\s*30%/);
   assert.match(css, /\.export-wordmark[\s\S]*?right:\s*64px/);
   assert.match(css, /\.export-wordmark[\s\S]*?bottom:\s*64px/);

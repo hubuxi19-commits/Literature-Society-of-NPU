@@ -52,54 +52,72 @@ function findFittingCharacterCount(unit, measure, maxHeight) {
   return best;
 }
 
-export function paginateExportUnits(units, measure, maxHeight) {
+export function paginateExportUnits(
+  units,
+  measure,
+  maxHeight,
+  continuationMaxHeight = maxHeight,
+) {
   if (typeof measure !== "function") {
     throw new TypeError("measure 必须是函数");
   }
   if (!Number.isFinite(maxHeight) || maxHeight <= 0) {
     throw new RangeError("maxHeight 必须大于零");
   }
+  if (!Number.isFinite(continuationMaxHeight) || continuationMaxHeight <= 0) {
+    throw new RangeError("continuationMaxHeight 必须大于零");
+  }
 
   const pages = [];
   let page = [];
   let pageHeight = 0;
+  let pageMaxHeight = maxHeight;
 
   const finishPage = () => {
     if (!page.length) return;
     pages.push(page);
     page = [];
     pageHeight = 0;
+    pageMaxHeight = continuationMaxHeight;
+  };
+
+  const splitParagraphAcrossPages = (unit) => {
+    let remaining = Array.from(unit.text);
+    while (remaining.length) {
+      const nextUnit = { ...unit, text: remaining.join("") };
+      const fitCount = findFittingCharacterCount(nextUnit, measure, pageMaxHeight);
+      if (!fitCount) {
+        throw new Error("作品中存在无法完整排入单页的内容，请调整后重试");
+      }
+      page.push({
+        ...unit,
+        text: remaining.slice(0, fitCount).join(""),
+      });
+      finishPage();
+      remaining = remaining.slice(fitCount);
+    }
   };
 
   for (const originalUnit of units ?? []) {
     let unit = { ...originalUnit, text: String(originalUnit.text ?? "") };
     let unitHeight = measure(unit);
 
-    if (unit.type === "paragraph" && unitHeight > maxHeight) {
+    if (unit.type === "paragraph" && unitHeight > pageMaxHeight) {
       finishPage();
-      let remaining = Array.from(unit.text);
-      while (remaining.length) {
-        unit = { ...unit, text: remaining.join("") };
-        const fitCount = findFittingCharacterCount(unit, measure, maxHeight);
-        if (!fitCount) {
-          throw new Error("作品中存在无法完整排入单页的内容，请调整后重试");
-        }
-        const fragment = {
-          ...unit,
-          text: remaining.slice(0, fitCount).join(""),
-        };
-        pages.push([fragment]);
-        remaining = remaining.slice(fitCount);
-      }
+      splitParagraphAcrossPages(unit);
       continue;
     }
 
-    if (unitHeight > maxHeight) {
+    if (unitHeight > pageMaxHeight && page.length) {
+      finishPage();
+    }
+
+    if (unitHeight > pageMaxHeight) {
       const label = unit.type === "line" ? "诗行" : "内容单元";
       throw new Error(`作品中的${label}无法完整排入单页，请调整后重试`);
     }
 
-    if (page.length && pageHeight + unitHeight > maxHeight) {
+    if (page.length && pageHeight + unitHeight > pageMaxHeight) {
       finishPage();
     }
 
@@ -147,13 +165,11 @@ function createUnitNode(doc, unit) {
   return node;
 }
 
-function createExportPage(doc, work, wordmarkUrl) {
+function createExportPage(doc, work, wordmarkUrl, options = {}) {
   const page = doc.createElement("article");
-  page.className = "export-page";
-
-  const title = doc.createElement("h1");
-  title.className = "export-title";
-  title.textContent = String(work.title ?? "");
+  page.className = options.showTitle === false
+    ? "export-page export-page--continuation"
+    : "export-page";
 
   const body = doc.createElement("div");
   body.className = "export-body";
@@ -174,7 +190,13 @@ function createExportPage(doc, work, wordmarkUrl) {
   wordmark.src = wordmarkUrl;
 
   footer.append(authorDate, pageNumber, wordmark);
-  page.append(title, body, footer);
+  if (options.showTitle !== false) {
+    const title = doc.createElement("h1");
+    title.className = "export-title";
+    title.textContent = String(work.title ?? "");
+    page.append(title);
+  }
+  page.append(body, footer);
   return page;
 }
 
@@ -315,6 +337,16 @@ export async function exportWorkImages(work, options = {}) {
     const wordmarkDataUrl = await loadWordmarkDataUrl(wordmark, win);
     const measurementBody = firstPage.querySelector(".export-body");
     const maxHeight = measurementBody.getBoundingClientRect().height;
+    const continuationPage = createExportPage(
+      doc,
+      work,
+      options.wordmarkUrl ?? WORDMARK_URL,
+      { showTitle: false },
+    );
+    root.append(continuationPage);
+    const continuationMaxHeight = continuationPage
+      .querySelector(".export-body")
+      .getBoundingClientRect().height;
     const measure = (unit) => {
       const node = createUnitNode(doc, unit);
       measurementBody.replaceChildren(node);
@@ -324,14 +356,22 @@ export async function exportWorkImages(work, options = {}) {
     };
 
     const units = splitExportUnits(work.content, work.category);
-    const plannedPages = paginateExportUnits(units, measure, maxHeight);
+    const plannedPages = paginateExportUnits(
+      units,
+      measure,
+      maxHeight,
+      continuationMaxHeight,
+    );
     if (!plannedPages.length) plannedPages.push([]);
+    continuationPage.remove();
 
     const pageElements = plannedPages.map((pageUnits, pageIndex) => {
       const page =
         pageIndex === 0
           ? firstPage
-          : createExportPage(doc, work, options.wordmarkUrl ?? WORDMARK_URL);
+          : createExportPage(doc, work, options.wordmarkUrl ?? WORDMARK_URL, {
+              showTitle: false,
+            });
       const body = page.querySelector(".export-body");
       body.replaceChildren(...pageUnits.map((unit) => createUnitNode(doc, unit)));
       page.querySelector(".export-page-number").textContent =

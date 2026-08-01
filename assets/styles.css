@@ -980,6 +980,10 @@ main {
   font-family: "Noto Serif SC", "Songti SC", SimSun, serif;
 }
 
+.export-page--continuation {
+  grid-template-rows: minmax(0, 1fr) 400px;
+}
+
 .export-title {
   max-width: 11.5em;
   margin: 0;
