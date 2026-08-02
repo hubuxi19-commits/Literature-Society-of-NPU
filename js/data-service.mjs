@@ -360,7 +360,7 @@ function createSupabaseService(config) {
   const getClient = async () => {
     if (!clientPromise) {
       clientPromise = import(SUPABASE_MODULE_URL).then(({ createClient }) =>
-        createClient(config.supabaseUrl, config.supabaseAnonKey),
+        createClient(config.supabaseUrl, config.supabasePublishableKey ?? config.supabaseAnonKey),
       );
     }
     return clientPromise;
@@ -688,7 +688,7 @@ export function createDataService(config = {}) {
   const hasRemoteConfig =
     config.mode === "supabase" &&
     Boolean(config.supabaseUrl) &&
-    Boolean(config.supabaseAnonKey);
+    Boolean(config.supabasePublishableKey ?? config.supabaseAnonKey);
   return hasRemoteConfig
     ? createSupabaseService(config)
     : createDemoService(config);

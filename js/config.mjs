@@ -1,5 +1,15 @@
-export const config = {
+import { loadConfig } from "./config-loader.mjs";
+
+const productionConfig = Object.freeze({
   mode: "supabase",
+  environment: "production",
   supabaseUrl: "https://odfjxtzgekhiaktzaxas.supabase.co",
-  supabaseAnonKey: "sb_publishable_JGnMQuwRNV6pTIzUORyqSg_PB-zGT0-",
-};
+  supabasePublishableKey: "sb_publishable_JGnMQuwRNV6pTIzUORyqSg_PB-zGT0-",
+  turnstileSiteKey: "",
+});
+
+export const config = await loadConfig({
+  hostname: globalThis.location?.hostname,
+  productionConfig,
+  loadLocalConfig: () => import("./config.local.mjs"),
+});

@@ -6,5 +6,6 @@ test-results/
 .env
 .env.*
 !.env.example
+js/config.local.mjs
 .DS_Store
 Thumbs.db
