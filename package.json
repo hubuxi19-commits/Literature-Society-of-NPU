@@ -2,6 +2,7 @@
   "name": "wenyuan-literature-community",
   "version": "1.0.0",
   "private": true,
+  "type": "module",
   "description": "西北工业大学学生文学社作品交流平台",
   "scripts": {
     "serve": "node tests/static-server.cjs 4173",
