@@ -5,7 +5,9 @@ const PURPOSE_LABELS = Object.freeze({
   reset_password: "重置密码",
 });
 
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const EMAIL_LOCAL_PATTERN = /^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+$/;
+const EMAIL_DOMAIN_LABEL_PATTERN =
+  /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 const MAX_RANDOM_VALUE = 0x1_0000_0000;
 const CODE_SPACE = 1_000_000;
 const UNBIASED_RANDOM_LIMIT = Math.floor(MAX_RANDOM_VALUE / CODE_SPACE) * CODE_SPACE;
@@ -15,9 +17,22 @@ export const SECURITY_CODE_MAX_ATTEMPTS = 5;
 
 export function normalizeRecoveryEmail(value) {
   const normalized = String(value ?? "").trim().toLowerCase();
+  const atIndex = normalized.indexOf("@");
+  const hasSingleAt = atIndex > 0 && atIndex === normalized.lastIndexOf("@");
+  const localPart = hasSingleAt ? normalized.slice(0, atIndex) : "";
+  const domain = hasSingleAt ? normalized.slice(atIndex + 1) : "";
+  const domainLabels = domain.split(".");
   if (
     normalized.length > 254 ||
-    !EMAIL_PATTERN.test(normalized)
+    localPart.length > 64 ||
+    !EMAIL_LOCAL_PATTERN.test(localPart) ||
+    localPart.startsWith(".") ||
+    localPart.endsWith(".") ||
+    localPart.includes("..") ||
+    domain.length > 253 ||
+    domainLabels.length < 2 ||
+    domainLabels.at(-1).length < 2 ||
+    !domainLabels.every((label) => EMAIL_DOMAIN_LABEL_PATTERN.test(label))
   ) {
     throw new Error("找回邮箱格式不正确");
   }
@@ -25,7 +40,7 @@ export function normalizeRecoveryEmail(value) {
 }
 
 function maskPart(value) {
-  if (value.length < 3) return `${value.slice(0, 1)}***`;
+  if (value.length <= 2) return "***";
   return `${value[0]}***${value.at(-1)}`;
 }
 
@@ -38,12 +53,10 @@ export function maskRecoveryEmail(value) {
   return `${maskPart(localPart)}@${maskedDomain}.${topLevelDomain}`;
 }
 
-export function createNumericCode(
-  randomBytes = (values) => crypto.getRandomValues(values),
-) {
+export function createNumericCode() {
   const values = new Uint32Array(1);
   do {
-    randomBytes(values);
+    crypto.getRandomValues(values);
   } while (values[0] >= UNBIASED_RANDOM_LIMIT);
   return String(values[0] % CODE_SPACE).padStart(6, "0");
 }

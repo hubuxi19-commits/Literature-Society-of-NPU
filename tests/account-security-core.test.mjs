@@ -4,6 +4,8 @@ import assert from "node:assert/strict";
 import {
   buildSecurityEmail,
   createNumericCode,
+  SECURITY_CODE_EXPIRES_MINUTES,
+  SECURITY_CODE_MAX_ATTEMPTS,
   digestSecret,
   maskRecoveryEmail,
   normalizeRecoveryEmail,
@@ -26,6 +28,38 @@ async function withEdgeRuntime({ env = {}, fetchImpl }, operation) {
   }
 }
 
+function withCryptoRandomValues(getRandomValues, operation) {
+  const cryptoDescriptor = Object.getOwnPropertyDescriptor(globalThis, "crypto");
+  Object.defineProperty(globalThis, "crypto", {
+    configurable: true,
+    value: { getRandomValues },
+  });
+  try {
+    return operation();
+  } finally {
+    Object.defineProperty(globalThis, "crypto", cryptoDescriptor);
+  }
+}
+
+async function captureConsole(operation) {
+  const methodNames = Object.getOwnPropertyNames(console).filter(
+    (name) => name !== "Console" && typeof console[name] === "function",
+  );
+  const originalMethods = new Map(
+    methodNames.map((name) => [name, console[name]]),
+  );
+  const emissions = [];
+  for (const name of methodNames) {
+    console[name] = (...args) => emissions.push([name, ...args]);
+  }
+  try {
+    await operation();
+  } finally {
+    for (const [name, method] of originalMethods) console[name] = method;
+  }
+  return emissions;
+}
+
 test("邮箱规范化并以固定遮罩隐藏完整地址", () => {
   assert.equal(
     normalizeRecoveryEmail("  Reader@Example.COM "),
@@ -39,14 +73,85 @@ test("邮箱规范化并以固定遮罩隐藏完整地址", () => {
   assert.throws(() => normalizeRecoveryEmail("not-an-email"), /邮箱格式/);
 });
 
-test("验证码生成器把随机值格式化为严格六位数字", () => {
-  const code = createNumericCode((values) => {
+test("邮箱拒绝连续点、空域标签和非法标签边界", () => {
+  for (const invalidEmail of [
+    ".reader@example.com",
+    "reader.@example.com",
+    "reader..name@example.com",
+    "reader@example..com",
+    "reader@-example.com",
+    "reader@example-.com",
+    "reader@@example.com",
+  ]) {
+    assert.throws(() => normalizeRecoveryEmail(invalidEmail), /邮箱格式/);
+  }
+});
+
+test("邮箱拒绝超长 local 与 domain label", () => {
+  const maximumLocal = "a".repeat(64);
+  const maximumDomainLabel = "b".repeat(63);
+  assert.equal(
+    normalizeRecoveryEmail(`${maximumLocal}@example.com`),
+    `${maximumLocal}@example.com`,
+  );
+  assert.equal(
+    normalizeRecoveryEmail(`reader@${maximumDomainLabel}.com`),
+    `reader@${maximumDomainLabel}.com`,
+  );
+  assert.throws(
+    () => normalizeRecoveryEmail(`${"a".repeat(65)}@example.com`),
+    /邮箱格式/,
+  );
+  assert.throws(
+    () => normalizeRecoveryEmail(`reader@${"a".repeat(64)}.com`),
+    /邮箱格式/,
+  );
+});
+
+test("短 local 和短域标签完全隐藏且合法子域保持结构", () => {
+  assert.equal(maskRecoveryEmail("a@example.com"), "***@e***e.com");
+  assert.equal(maskRecoveryEmail("ab@x.com"), "***@***.com");
+  assert.equal(
+    maskRecoveryEmail("Reader@Mail.Example.COM"),
+    "r***r@m***l.e***e.com",
+  );
+});
+
+test("验证码公共入口忽略调用方 RNG 并始终调用 Web Crypto", () => {
+  let cryptoCalls = 0;
+  let injectedRngCalled = false;
+  const code = withCryptoRandomValues((values) => {
+    cryptoCalls += 1;
     values[0] = 42;
     return values;
-  });
+  }, () => createNumericCode((values) => {
+    injectedRngCalled = true;
+    values[0] = 999999;
+    return values;
+  }));
+
+  assert.equal(code, "000042");
+  assert.equal(cryptoCalls, 1);
+  assert.equal(injectedRngCalled, false);
+});
+
+test("验证码公共入口拒绝偏差区间后重采样并保持六位", () => {
+  const samples = [0xffffffff, 1_000_042];
+  let cryptoCalls = 0;
+  const code = withCryptoRandomValues((values) => {
+    values[0] = samples[cryptoCalls];
+    cryptoCalls += 1;
+    return values;
+  }, () => createNumericCode());
 
   assert.equal(code, "000042");
   assert.match(code, /^\d{6}$/);
+  assert.equal(cryptoCalls, 2);
+});
+
+test("验证码安全契约固定为十分钟与最多五次", () => {
+  assert.equal(SECURITY_CODE_EXPIRES_MINUTES, 10);
+  assert.equal(SECURITY_CODE_MAX_ATTEMPTS, 5);
 });
 
 test("摘要使用 HMAC-SHA-256 固定向量并受 pepper 隔离", async () => {
@@ -152,34 +257,89 @@ test("Turnstile 向固定端点提交 secret、token 和幂等键", async () => 
   });
 });
 
-test("Turnstile 将网络、JSON 与服务拒绝统一为不泄露的公开错误", async () => {
+test("Turnstile 网络与 JSON 失败不泄露 token、secret、provider body 或日志", async () => {
   const privateDetails = "provider-private-body";
   const failures = [
     async () => {
       throw new Error(privateDetails);
     },
-    async () => new Response(privateDetails, { status: 502 }),
-    async () => new Response(`{"success":false,"detail":"${privateDetails}"}`, {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    }),
+    async () => new Response(privateDetails, { status: 200 }),
   ];
 
-  for (const fetchImpl of failures) {
+  const emissions = await captureConsole(async () => {
+    for (const fetchImpl of failures) {
+      await withEdgeRuntime({
+        env: { TURNSTILE_SECRET_KEY: "fake-turnstile-private-secret" },
+        fetchImpl,
+      }, async () => {
+        await assert.rejects(
+          verifyTurnstile("captcha-private-token", "request-failure"),
+          (error) => {
+            assert.equal(error.message, "人机验证失败，请刷新后重试");
+            assert.doesNotMatch(
+              error.message,
+              /captcha-private-token|fake-turnstile-private-secret|provider-private-body/,
+            );
+            return true;
+          },
+        );
+      });
+    }
+  });
+  assert.deepEqual(emissions, []);
+});
+
+test("Turnstile 非 2xx 即使 body 声称成功也 fail closed", async () => {
+  await withEdgeRuntime({
+    env: { TURNSTILE_SECRET_KEY: "fake-turnstile-secret" },
+    fetchImpl: async () => new Response(
+      '{"success":true,"challenge_ts":"2026-08-02T00:00:00Z"}',
+      { status: 502, headers: { "content-type": "application/json" } },
+    ),
+  }, async () => {
+    await assert.rejects(
+      verifyTurnstile("captcha-token", "request-http-failure"),
+      { message: "人机验证失败，请刷新后重试" },
+    );
+  });
+});
+
+test("Turnstile 2xx 但 success 不为 true 时 fail closed", async () => {
+  await withEdgeRuntime({
+    env: { TURNSTILE_SECRET_KEY: "fake-turnstile-secret" },
+    fetchImpl: async () => new Response(
+      '{"success":false,"error-codes":["invalid-input-response"]}',
+      { status: 200, headers: { "content-type": "application/json" } },
+    ),
+  }, async () => {
+    await assert.rejects(
+      verifyTurnstile("captcha-token", "request-field-failure"),
+      { message: "人机验证失败，请刷新后重试" },
+    );
+  });
+});
+
+test("Turnstile 空 token 和缺 secret 不产生任何 console 输出", async () => {
+  const emissions = await captureConsole(async () => {
     await withEdgeRuntime({
-      env: { TURNSTILE_SECRET_KEY: "fake-turnstile-secret" },
-      fetchImpl,
+      env: { TURNSTILE_SECRET_KEY: "fake-turnstile-private-secret" },
+      fetchImpl: async () => new Response('{"success":true}'),
     }, async () => {
       await assert.rejects(
-        verifyTurnstile("captcha-token", "request-failure"),
-        (error) => {
-          assert.equal(error.message, "人机验证失败，请刷新后重试");
-          assert.doesNotMatch(error.message, new RegExp(privateDetails));
-          return true;
-        },
+        verifyTurnstile("   ", "request-empty-token-log-check"),
+        { message: "请完成人机验证" },
       );
     });
-  }
+    await withEdgeRuntime({
+      fetchImpl: async () => new Response('{"success":true}'),
+    }, async () => {
+      await assert.rejects(
+        verifyTurnstile("captcha-private-token", "request-secret-log-check"),
+        { message: "验证码服务尚未配置" },
+      );
+    });
+  });
+  assert.deepEqual(emissions, []);
 });
 
 test("Brevo 发送纯文本账号安全邮件并只返回 messageId", async () => {
@@ -192,7 +352,7 @@ test("Brevo 发送纯文本账号安全邮件并只返回 messageId", async () =
     },
     fetchImpl: async (url, options) => {
       request = { url, options };
-      return new Response('{"messageId":"message-123"}', {
+      return new Response('{"messageId":"  message-123  "}', {
         status: 201,
         headers: { "content-type": "application/json" },
       });
@@ -254,6 +414,63 @@ test("Brevo 配置缺失时拒绝发送且不发请求", async () => {
     );
   });
   assert.equal(requested, false);
+});
+
+test("Brevo 非 2xx 即使 body 带 messageId 也 fail closed", async () => {
+  await withEdgeRuntime({
+    env: {
+      BREVO_API_KEY: "fake-brevo-api-key",
+      BREVO_SENDER_NAME: "文苑安全中心",
+      BREVO_SENDER_EMAIL: "security@example.invalid",
+    },
+    fetchImpl: async () => new Response(
+      '{"messageId":"must-not-be-accepted"}',
+      { status: 400, headers: { "content-type": "application/json" } },
+    ),
+  }, async () => {
+    await assert.rejects(
+      sendSecurityEmail({
+        to: "reader@example.com",
+        purpose: "reset_password",
+        code: "123456",
+        expiresMinutes: 10,
+        requestId: "request-http-failure",
+      }),
+      { message: "安全邮件发送失败，请稍后重试" },
+    );
+  });
+});
+
+test("Brevo 2xx 缺失、空或纯空白 messageId 时 fail closed", async () => {
+  const invalidResults = [
+    {},
+    { messageId: "" },
+    { messageId: "   " },
+  ];
+  for (const result of invalidResults) {
+    await withEdgeRuntime({
+      env: {
+        BREVO_API_KEY: "fake-brevo-api-key",
+        BREVO_SENDER_NAME: "文苑安全中心",
+        BREVO_SENDER_EMAIL: "security@example.invalid",
+      },
+      fetchImpl: async () => new Response(JSON.stringify(result), {
+        status: 201,
+        headers: { "content-type": "application/json" },
+      }),
+    }, async () => {
+      await assert.rejects(
+        sendSecurityEmail({
+          to: "reader@example.com",
+          purpose: "reset_password",
+          code: "123456",
+          expiresMinutes: 10,
+          requestId: "request-invalid-message-id",
+        }),
+        { message: "安全邮件发送失败，请稍后重试" },
+      );
+    });
+  }
 });
 
 test("Brevo 失败不记录或返回收件人、验证码与 provider body", async () => {

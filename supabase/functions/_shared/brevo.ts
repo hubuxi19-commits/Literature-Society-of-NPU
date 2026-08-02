@@ -65,10 +65,13 @@ export async function sendSecurityEmail({
     });
     if (!response.ok) throw new Error(EMAIL_FAILURE_MESSAGE);
     const result = await response.json();
-    if (typeof result?.messageId !== "string" || result.messageId === "") {
+    const messageId = typeof result?.messageId === "string"
+      ? result.messageId.trim()
+      : "";
+    if (!messageId) {
       throw new Error(EMAIL_FAILURE_MESSAGE);
     }
-    return { messageId: result.messageId };
+    return { messageId };
   } catch {
     throw new Error(EMAIL_FAILURE_MESSAGE);
   }
