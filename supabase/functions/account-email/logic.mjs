@@ -1,0 +1,465 @@
+import {
+  createNumericCode,
+  digestSecret,
+  maskRecoveryEmail,
+  normalizeRecoveryEmail,
+  SECURITY_CODE_EXPIRES_MINUTES,
+  SECURITY_CODE_MAX_ATTEMPTS,
+} from "../_shared/security-core.mjs";
+
+const ACTIVE_TOKEN_PURPOSES = [
+  "bind_email",
+  "change_email_old",
+  "change_email_new",
+];
+const SEND_COOLDOWN_MS = 60_000;
+const RECENT_LOGIN_SECONDS = 5 * 60;
+const RATE_LIMIT_WINDOW_SECONDS = 15 * 60;
+const RATE_LIMIT_MAX = Object.freeze({ user: 5, email: 3, ip: 20 });
+const PUBLIC_MESSAGES = Object.freeze({
+  unauthorized: "请先登录",
+  invalid_email: "找回邮箱格式不正确",
+  invalid_code: "验证码无效或已过期",
+  invalid_json: "请求内容格式不正确",
+  unsupported_action: "不支持的操作",
+  method_not_allowed: "请求方法不受支持",
+  origin_not_allowed: "请求来源不受信任",
+  rate_limited: "操作过于频繁，请稍后重试",
+  email_unavailable: "该邮箱暂不可用",
+  recovery_email_already_verified: "请通过换绑流程修改找回邮箱",
+  recovery_email_unverified: "请先验证找回邮箱",
+  recent_login_required: "请重新登录后再修改找回邮箱",
+  captcha_failed: "人机验证失败，请刷新后重试",
+  delivery_failed: "安全邮件发送失败，请稍后重试",
+  storage_unavailable: "服务暂时不可用，请稍后重试",
+  internal_error: "服务暂时不可用，请稍后重试",
+});
+
+export class PublicError extends Error {
+  constructor(code, status, message = PUBLIC_MESSAGES[code]) {
+    super(message ?? PUBLIC_MESSAGES.internal_error);
+    this.name = "PublicError";
+    this.code = code;
+    this.status = status;
+  }
+}
+
+function publicError(code, status) {
+  return new PublicError(code, status);
+}
+
+function corsHeaders(origin, allowedOrigins) {
+  if (!origin) return {};
+  if (!allowedOrigins.includes(origin)) throw publicError("origin_not_allowed", 403);
+  return {
+    "access-control-allow-origin": origin,
+    "access-control-allow-methods": "POST, OPTIONS",
+    "access-control-allow-headers": "authorization, apikey, content-type, x-request-id",
+    "access-control-max-age": "86400",
+    vary: "Origin",
+  };
+}
+
+function safeRequestId(request, createRequestId) {
+  const supplied = request.headers.get("x-request-id")?.trim();
+  return supplied && /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(supplied)
+    ? supplied
+    : createRequestId();
+}
+
+function jsonResponse(body, status, requestId, headers) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store",
+      "x-content-type-options": "nosniff",
+      "x-request-id": requestId,
+      ...headers,
+    },
+  });
+}
+
+function stateResponse(state, maskedEmail, nextSendAt) {
+  return { state, maskedEmail, nextSendAt };
+}
+
+function requireUser(context) {
+  if (context?.authFailure === "internal") throw publicError("internal_error", 500);
+  const sub = context?.userClaims?.sub;
+  if (typeof sub !== "string" || sub.trim() === "") {
+    throw publicError("unauthorized", 401);
+  }
+  return sub;
+}
+
+function requireRecentLogin(context, now) {
+  const issuedAt = context?.userClaims?.iat;
+  const age = Math.floor(now.getTime() / 1000) - Number(issuedAt);
+  if (!Number.isFinite(age) || age < 0 || age > RECENT_LOGIN_SECONDS) {
+    throw publicError("recent_login_required", 401);
+  }
+}
+
+function requireCode(value) {
+  const code = String(value ?? "").trim();
+  if (!/^\d{6}$/.test(code)) throw publicError("invalid_code", 400);
+  return code;
+}
+
+function normalizeEmail(value) {
+  try {
+    return normalizeRecoveryEmail(value);
+  } catch {
+    throw publicError("invalid_email", 400);
+  }
+}
+
+function clientIp(request) {
+  return request.headers.get("cf-connecting-ip")?.trim() ||
+    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+    "unknown";
+}
+
+function nextSendAt(createdAt) {
+  return new Date(new Date(createdAt).getTime() + SEND_COOLDOWN_MS).toISOString();
+}
+
+function isConflict(error) {
+  return error?.code === "email_conflict";
+}
+
+export function createAccountEmailHandler({
+  store,
+  allowedOrigins = [],
+  now = () => new Date(),
+  createCode = createNumericCode,
+  createRequestId = () => crypto.randomUUID(),
+  tokenPepper,
+  rateLimitPepper,
+  verifyTurnstile,
+  sendSecurityEmail,
+  logger = () => {},
+}) {
+  async function digestCode(purpose, userId, code) {
+    return digestSecret(`${purpose}:${userId}:${code}`, tokenPepper);
+  }
+
+  async function consumeLimits(action, userId, emailNormalized, ip) {
+    const inputs = [
+      ["user", userId],
+      ["email", emailNormalized],
+      ["ip", ip],
+    ];
+    const results = [];
+    for (const [scope, value] of inputs) {
+      const keyDigest = await digestSecret(`${scope}:${value}`, rateLimitPepper);
+      results.push(await store.consumeRateLimit({
+        action: action.replaceAll("-", "_"),
+        scope,
+        keyDigest,
+        windowSeconds: RATE_LIMIT_WINDOW_SECONDS,
+        maxRequests: RATE_LIMIT_MAX[scope],
+      }));
+    }
+    if (results.some((allowed) => !allowed)) throw publicError("rate_limited", 429);
+  }
+
+  async function sendInsertedToken({
+    userId,
+    purpose,
+    emailNormalized,
+    nextEmailNormalized,
+    code,
+    requestId,
+    currentTime,
+  }) {
+    const tokenDigest = await digestCode(purpose, userId, code);
+    const expiresAt = new Date(
+      currentTime.getTime() + SECURITY_CODE_EXPIRES_MINUTES * 60_000,
+    ).toISOString();
+    const token = await store.insertToken({
+      userId,
+      purpose,
+      tokenDigest,
+      emailNormalized,
+      nextEmailNormalized,
+      expiresAt,
+      maxAttempts: SECURITY_CODE_MAX_ATTEMPTS,
+    });
+    try {
+      await sendSecurityEmail({
+        to: purpose === "change_email_new" ? nextEmailNormalized : emailNormalized,
+        purpose,
+        code,
+        expiresMinutes: SECURITY_CODE_EXPIRES_MINUTES,
+        requestId,
+      });
+    } catch {
+      await store.markTokenUsed({ tokenId: token.id, usedAt: currentTime.toISOString() });
+      throw publicError("delivery_failed", 502);
+    }
+    return token;
+  }
+
+  async function verifyCaptcha(token, requestId) {
+    try {
+      await verifyTurnstile(token, requestId);
+    } catch {
+      throw publicError("captcha_failed", 400);
+    }
+  }
+
+  async function status(userId, currentTime) {
+    const recovery = await store.getRecoveryEmail(userId);
+    const token = await store.getLatestActiveToken({
+      userId,
+      purposes: ACTIVE_TOKEN_PURPOSES,
+      now: currentTime.toISOString(),
+    });
+    if (token?.purpose === "bind_email" && !recovery) {
+      return stateResponse(
+        "pending",
+        maskRecoveryEmail(token.emailNormalized),
+        nextSendAt(token.createdAt),
+      );
+    }
+    if (recovery && token?.purpose?.startsWith("change_email_")) {
+      return stateResponse(
+        "changing",
+        maskRecoveryEmail(recovery.emailNormalized),
+        nextSendAt(token.createdAt),
+      );
+    }
+    if (recovery) {
+      return stateResponse("verified", maskRecoveryEmail(recovery.emailNormalized), null);
+    }
+    return stateResponse("unbound", null, null);
+  }
+
+  async function requestBind(body, request, context, requestId, currentTime) {
+    const userId = requireUser(context);
+    const emailNormalized = normalizeEmail(body.email);
+    await verifyCaptcha(body.captchaToken, requestId);
+    await consumeLimits("request-bind", userId, emailNormalized, clientIp(request));
+    if (await store.isEmailOwnedByAnother({ emailNormalized, userId })) {
+      throw publicError("email_unavailable", 409);
+    }
+    const existingRecovery = await store.getRecoveryEmail(userId);
+    if (existingRecovery?.verifiedAt) {
+      throw publicError("recovery_email_already_verified", 409);
+    }
+    await store.invalidateUnusedTokens({
+      userId,
+      purposes: ["bind_email"],
+      usedAt: currentTime.toISOString(),
+    });
+    const token = await sendInsertedToken({
+      userId,
+      purpose: "bind_email",
+      emailNormalized,
+      nextEmailNormalized: null,
+      code: createCode(),
+      requestId,
+      currentTime,
+    });
+    return stateResponse(
+      "pending",
+      maskRecoveryEmail(emailNormalized),
+      nextSendAt(token.createdAt ?? currentTime.toISOString()),
+    );
+  }
+
+  async function verifyBind(body, context, currentTime) {
+    const userId = requireUser(context);
+    const code = requireCode(body.code);
+    const token = await store.consumeToken({
+      tokenDigest: await digestCode("bind_email", userId, code),
+      purpose: "bind_email",
+      userId,
+      maxAttempts: SECURITY_CODE_MAX_ATTEMPTS,
+    });
+    if (!token?.emailNormalized) throw publicError("invalid_code", 400);
+    try {
+      await store.upsertRecoveryEmail({
+        userId,
+        emailNormalized: token.emailNormalized,
+        verifiedAt: currentTime.toISOString(),
+      });
+    } catch (error) {
+      if (isConflict(error)) throw publicError("email_unavailable", 409);
+      throw error;
+    }
+    return stateResponse("verified", maskRecoveryEmail(token.emailNormalized), null);
+  }
+
+  async function requestChange(body, request, context, requestId, currentTime) {
+    const userId = requireUser(context);
+    requireRecentLogin(context, currentTime);
+    const recovery = await store.getRecoveryEmail(userId);
+    if (!recovery?.verifiedAt) throw publicError("recovery_email_unverified", 409);
+    const newEmail = normalizeEmail(body.newEmail);
+    if (newEmail === recovery.emailNormalized) throw publicError("email_unavailable", 409);
+    await verifyCaptcha(body.captchaToken, requestId);
+    await consumeLimits("request-change", userId, newEmail, clientIp(request));
+    if (await store.isEmailOwnedByAnother({ emailNormalized: newEmail, userId })) {
+      throw publicError("email_unavailable", 409);
+    }
+    await store.invalidateUnusedTokens({
+      userId,
+      purposes: ["change_email_old", "change_email_new"],
+      usedAt: currentTime.toISOString(),
+    });
+    const token = await sendInsertedToken({
+      userId,
+      purpose: "change_email_old",
+      emailNormalized: recovery.emailNormalized,
+      nextEmailNormalized: newEmail,
+      code: createCode(),
+      requestId,
+      currentTime,
+    });
+    return stateResponse(
+      "changing",
+      maskRecoveryEmail(recovery.emailNormalized),
+      nextSendAt(token.createdAt ?? currentTime.toISOString()),
+    );
+  }
+
+  async function confirmChangeOld(body, context, requestId, currentTime) {
+    const userId = requireUser(context);
+    const code = requireCode(body.code);
+    const token = await store.consumeToken({
+      tokenDigest: await digestCode("change_email_old", userId, code),
+      purpose: "change_email_old",
+      userId,
+      maxAttempts: SECURITY_CODE_MAX_ATTEMPTS,
+    });
+    if (!token?.emailNormalized || !token?.nextEmailNormalized) {
+      throw publicError("invalid_code", 400);
+    }
+    if (await store.isEmailOwnedByAnother({
+      emailNormalized: token.nextEmailNormalized,
+      userId,
+    })) throw publicError("email_unavailable", 409);
+    await store.invalidateUnusedTokens({
+      userId,
+      purposes: ["change_email_new"],
+      usedAt: currentTime.toISOString(),
+    });
+    const nextToken = await sendInsertedToken({
+      userId,
+      purpose: "change_email_new",
+      emailNormalized: token.emailNormalized,
+      nextEmailNormalized: token.nextEmailNormalized,
+      code: createCode(),
+      requestId,
+      currentTime,
+    });
+    return stateResponse(
+      "changing",
+      maskRecoveryEmail(token.emailNormalized),
+      nextSendAt(nextToken.createdAt ?? currentTime.toISOString()),
+    );
+  }
+
+  async function confirmChangeNew(body, context, currentTime) {
+    const userId = requireUser(context);
+    const code = requireCode(body.code);
+    const token = await store.consumeToken({
+      tokenDigest: await digestCode("change_email_new", userId, code),
+      purpose: "change_email_new",
+      userId,
+      maxAttempts: SECURITY_CODE_MAX_ATTEMPTS,
+    });
+    if (!token?.nextEmailNormalized) throw publicError("invalid_code", 400);
+    if (await store.isEmailOwnedByAnother({
+      emailNormalized: token.nextEmailNormalized,
+      userId,
+    })) throw publicError("email_unavailable", 409);
+    try {
+      await store.updateRecoveryEmail({
+        userId,
+        emailNormalized: token.nextEmailNormalized,
+        verifiedAt: currentTime.toISOString(),
+      });
+    } catch (error) {
+      if (isConflict(error)) throw publicError("email_unavailable", 409);
+      throw error;
+    }
+    return stateResponse(
+      "verified",
+      maskRecoveryEmail(token.nextEmailNormalized),
+      null,
+    );
+  }
+
+  return async function handleAccountEmail(request, context = {}) {
+    const requestId = safeRequestId(request, createRequestId);
+    let headers = {};
+    try {
+      headers = corsHeaders(request.headers.get("origin"), allowedOrigins);
+      if (request.method === "OPTIONS") {
+        return new Response(null, { status: 204, headers: { ...headers, "x-request-id": requestId } });
+      }
+      if (request.method !== "POST") throw publicError("method_not_allowed", 405);
+      requireUser(context);
+      let body;
+      try {
+        body = await request.json();
+      } catch {
+        throw publicError("invalid_json", 400);
+      }
+      if (!body || typeof body !== "object" || Array.isArray(body)) {
+        throw publicError("invalid_json", 400);
+      }
+      const currentTime = now();
+      let result;
+      switch (body.action) {
+        case "status": {
+          const userId = requireUser(context);
+          result = await status(userId, currentTime);
+          break;
+        }
+        case "request-bind":
+          result = await requestBind(body, request, context, requestId, currentTime);
+          break;
+        case "verify-bind":
+          result = await verifyBind(body, context, currentTime);
+          break;
+        case "request-change":
+          result = await requestChange(body, request, context, requestId, currentTime);
+          break;
+        case "confirm-change-old":
+          result = await confirmChangeOld(body, context, requestId, currentTime);
+          break;
+        case "confirm-change-new":
+          result = await confirmChangeNew(body, context, currentTime);
+          break;
+        default:
+          requireUser(context);
+          throw publicError("unsupported_action", 400);
+      }
+      return jsonResponse(result, 200, requestId, headers);
+    } catch (error) {
+      const publicFailure = error instanceof PublicError
+        ? error
+        : error?.code === "storage_unavailable"
+        ? publicError("storage_unavailable", 503)
+        : publicError("internal_error", 500);
+      logger({
+        event: "account_email_request_failed",
+        requestId,
+        code: publicFailure.code,
+        status: publicFailure.status,
+      });
+      return jsonResponse({
+        error: {
+          code: publicFailure.code,
+          message: publicFailure.message,
+          requestId,
+        },
+      }, publicFailure.status, requestId, headers);
+    }
+  };
+}

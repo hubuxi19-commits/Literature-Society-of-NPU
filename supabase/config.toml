@@ -1,0 +1,5 @@
+[functions.account-email]
+verify_jwt = true
+
+[functions.password-recovery]
+verify_jwt = false
