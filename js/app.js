@@ -17,6 +17,8 @@ import {
   createExcerpt,
   filterAndSortWorks,
   formatDate,
+  formatDateTime,
+  getPenNameChangeAvailability,
   isPoetryCategory,
   normalizeCategory,
   parseRoute,
@@ -30,6 +32,8 @@ const app = document.querySelector("#app");
 const siteHeader = document.querySelector(".site-header");
 const authDialog = document.querySelector("#authDialog");
 const confirmDialog = document.querySelector("#confirmDialog");
+const profileDialog = document.querySelector("#profileDialog");
+const profileDialogContent = document.querySelector("#profileDialogContent");
 const confirmMessage = document.querySelector("#confirmMessage");
 const accountButton = document.querySelector("#accountButton");
 const accountMenu = document.querySelector("#accountMenu");
@@ -212,6 +216,97 @@ function switchAuthTab(tab) {
 
 function closeAuth() {
   if (authDialog.open) authDialog.close();
+}
+
+function closeProfileEditor() {
+  if (profileDialog.open) profileDialog.close();
+}
+
+function createProfileEditor(profile) {
+  const penNameAvailability = getPenNameChangeAvailability(
+    profile.pen_name_changed_at,
+  );
+  const penNameHint = penNameAvailability.canChange
+    ? "笔名每七天最多修改一次；保存新笔名后将开始冷却。"
+    : `笔名正在冷却，可于 ${formatDateTime(
+        penNameAvailability.nextChangeAt,
+      )} 后再次修改。`;
+  const form = element("form", {
+    className: "profile-form",
+    id: "profileForm",
+    dataset: { profileId: profile.id },
+  });
+  const heading = element("h2", {
+    id: "profileDialogTitle",
+    text: "编辑公开资料",
+  });
+  const head = element("div", { className: "modal-head" }, [
+    element("div", { className: "profile-dialog-title" }, [
+      element("p", { className: "eyebrow", text: "个人主页" }),
+      heading,
+    ]),
+    element("button", {
+      className: "profile-dialog-close",
+      type: "button",
+      text: "×",
+      dataset: { action: "close-profile-editor" },
+      attrs: {
+        "aria-label": "关闭编辑资料窗口",
+        title: "关闭",
+      },
+    }),
+  ]);
+
+  const fields = element("div", { className: "profile-editor-fields" }, [
+    element("div", { className: "profile-field" }, [
+      element("label", {}, [
+        element("span", { text: "笔名" }),
+        element("input", {
+          name: "penName",
+          value: profile.pen_name,
+          attrs: {
+            required: true,
+            maxlength: 24,
+            disabled: !penNameAvailability.canChange,
+            "aria-describedby": "pen-name-hint",
+          },
+        }),
+      ]),
+      element("p", {
+        id: "pen-name-hint",
+        className: "profile-meta",
+        text: penNameHint,
+      }),
+    ]),
+    element("div", { className: "profile-field profile-bio-field" }, [
+      element("label", {}, [
+        element("span", { text: "个人简介" }),
+        element("textarea", {
+          name: "bio",
+          attrs: { maxlength: 240, rows: 4 },
+        }),
+      ]),
+    ]),
+  ]);
+  fields.querySelector("textarea").textContent = profile.bio ?? "";
+
+  const footer = element("div", { className: "profile-dialog-actions" }, [
+    element("button", {
+      className: "primary-button",
+      type: "submit",
+      text: "保存公开资料",
+    }),
+  ]);
+
+  form.append(head, fields, footer);
+  return form;
+}
+
+function openProfileEditor() {
+  if (!state.session?.profile) return;
+  replaceContent(profileDialogContent, createProfileEditor(state.session.profile));
+  if (!profileDialog.open) profileDialog.showModal();
+  profileDialog.querySelector("input:not(:disabled), textarea")?.focus();
 }
 
 function requestConfirmation(message) {
@@ -1521,6 +1616,15 @@ async function renderAuthor(profileId) {
   showLoading("正在整理作者作品");
   try {
     const profile = await service.getProfile(profileId);
+    if (state.session?.profile.id === profile.id) {
+      Object.assign(state.session.profile, {
+        pen_name: profile.pen_name,
+        pen_name_changed_at: profile.pen_name_changed_at,
+        bio: profile.bio,
+        updated_at: profile.updated_at,
+      });
+      updateHeader();
+    }
     const shell = element("div", { className: "page-shell" });
     const header = element("header", { className: "profile-header" });
     const identity = element("div", {}, [
@@ -1540,6 +1644,18 @@ async function renderAuthor(profileId) {
         text: profile.bio || "作者还没有留下简介。",
       }),
     ]);
+    if (state.session?.profile.id === profile.id) {
+      identity.append(
+        element("div", { className: "profile-actions" }, [
+          element("button", {
+            className: "quiet-button",
+            type: "button",
+            text: "编辑资料",
+            dataset: { action: "open-profile-editor" },
+          }),
+        ]),
+      );
+    }
     const stats = element("dl", { className: "profile-stats" });
     [
       ["作品", profile.work_count],
@@ -1579,34 +1695,7 @@ async function renderAuthor(profileId) {
     works.append(workList);
     content.append(works);
 
-    if (state.session?.profile.id === profile.id) {
-      const form = element("form", {
-        className: "profile-form",
-        id: "profileForm",
-        dataset: { profileId: profile.id },
-      });
-      form.append(
-        element("h2", { text: "编辑公开资料" }),
-        element("p", {
-          className: "profile-meta",
-          text: `笔名由注册时确定，暂不支持修改。当前笔名为“${profile.pen_name}”。`,
-        }),
-        element("label", {}, [
-          element("span", { text: "简介" }),
-          element("textarea", {
-            name: "bio",
-            attrs: { maxlength: 240 },
-          }),
-        ]),
-        element("button", {
-          className: "primary-button",
-          type: "submit",
-          text: "保存简介",
-        }),
-      );
-      form.querySelector("textarea").textContent = profile.bio ?? "";
-      content.append(form);
-    } else {
+    if (state.session?.profile.id !== profile.id) {
       content.append(
         element("aside", { className: "submission-note" }, [
           element("p", { className: "eyebrow", text: "ABOUT AUTHORS" }),
@@ -1797,6 +1886,7 @@ function renderNotFound() {
 
 async function renderCurrentRoute() {
   accountMenu.hidden = true;
+  closeProfileEditor();
   siteHeader.dataset.menuOpen = "false";
   document
     .querySelector(".menu-toggle")
@@ -1955,6 +2045,10 @@ document.addEventListener("click", async (event) => {
     openAuth("login", trigger.dataset.returnHash || null);
   } else if (action === "close-auth") {
     closeAuth();
+  } else if (action === "open-profile-editor") {
+    openProfileEditor();
+  } else if (action === "close-profile-editor") {
+    closeProfileEditor();
   } else if (action === "auth-tab") {
     switchAuthTab(trigger.dataset.tab);
   } else if (action === "toggle-account-menu") {
@@ -2198,16 +2292,33 @@ document.addEventListener("submit", async (event) => {
   } else if (form.id === "profileForm") {
     event.preventDefault();
     const data = new FormData(form);
+    const penNameInput = form.elements.namedItem("penName");
+    const submit = form.querySelector('[type="submit"]');
+    submit.disabled = true;
+    submit.textContent = "正在保存…";
     try {
       const profile = await service.updateProfile(form.dataset.profileId, {
+        penName:
+          penNameInput instanceof HTMLInputElement
+            ? penNameInput.value
+            : state.session.profile.pen_name,
         bio: data.get("bio"),
       });
       state.session.profile = profile;
+      state.works.forEach((work) => {
+        if (work.author_id === profile.id) work.author_pen_name = profile.pen_name;
+      });
+      state.discussions.forEach((comment) => {
+        if (comment.user_id === profile.id) comment.user_pen_name = profile.pen_name;
+      });
       updateHeader();
       showToast("公开资料已更新。", "success");
+      closeProfileEditor();
       await renderAuthor(profile.id);
     } catch (error) {
       showToast(error.message);
+      submit.disabled = false;
+      submit.textContent = "保存公开资料";
     }
   }
 });

@@ -6,6 +6,7 @@ create extension if not exists pgcrypto;
 create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
   pen_name text not null check (char_length(pen_name) between 1 and 24),
+  pen_name_changed_at timestamptz,
   bio text not null default '' check (char_length(bio) <= 240),
   role text not null default 'member' check (role in ('member', 'admin')),
   created_at timestamptz not null default now(),
@@ -138,6 +139,67 @@ as $$
     where id = auth.uid()
       and role = 'admin'
   );
+$$;
+
+create or replace function public.update_own_profile(
+  requested_pen_name text,
+  requested_bio text
+)
+returns public.profiles
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  target public.profiles;
+  normalized_pen_name text;
+  normalized_bio text;
+begin
+  if auth.uid() is null then
+    raise exception '请先登录';
+  end if;
+
+  normalized_pen_name := btrim(coalesce(requested_pen_name, ''));
+  normalized_bio := btrim(coalesce(requested_bio, ''));
+  if char_length(normalized_pen_name) not between 1 and 24 then
+    raise exception '笔名必须为 1 至 24 个字符';
+  end if;
+  if char_length(normalized_bio) > 240 then
+    raise exception '简介不能超过 240 个字符';
+  end if;
+
+  select *
+  into target
+  from public.profiles
+  where id = auth.uid()
+  for update;
+
+  if target.id is null then
+    raise exception '作者不存在';
+  end if;
+
+  if target.pen_name <> normalized_pen_name then
+    if target.pen_name_changed_at is not null
+      and now() < target.pen_name_changed_at + interval '7 days' then
+      raise exception '笔名每七天只能修改一次，请在冷却期结束后再试';
+    end if;
+
+    update public.profiles
+    set
+      pen_name = normalized_pen_name,
+      pen_name_changed_at = now(),
+      bio = normalized_bio
+    where id = auth.uid()
+    returning * into target;
+  else
+    update public.profiles
+    set bio = normalized_bio
+    where id = auth.uid()
+    returning * into target;
+  end if;
+
+  return target;
+end;
 $$;
 
 create or replace function public.validate_comment_parent()
@@ -406,6 +468,9 @@ grant execute on function public.soft_delete_comment(uuid) to authenticated;
 
 revoke all on function public.set_work_featured(uuid, boolean) from public;
 grant execute on function public.set_work_featured(uuid, boolean) to authenticated;
+
+revoke all on function public.update_own_profile(text, text) from public;
+grant execute on function public.update_own_profile(text, text) to authenticated;
 
 insert into public.site_settings (key, value)
 values

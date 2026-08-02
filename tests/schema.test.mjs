@@ -57,7 +57,7 @@ test("schema 允许新诗和旧诗并使用更新后的征稿文案", async () =
   );
 });
 
-test("schema 只允许新分类并禁止普通用户更新笔名", async () => {
+test("schema 禁止直接更新笔名并通过加锁 RPC 限制七天一次", async () => {
   const sql = await readFile(schemaUrl, "utf8");
   assert.match(
     sql,
@@ -70,6 +70,14 @@ test("schema 只允许新分类并禁止普通用户更新笔名", async () => {
   assert.doesNotMatch(
     sql,
     /grant update\s*\([^)]*pen_name[^)]*\)\s*on table public\.profiles/i,
+  );
+  assert.match(sql, /pen_name_changed_at timestamptz/i);
+  assert.match(sql, /create or replace function public\.update_own_profile/i);
+  assert.match(sql, /where id = auth\.uid\(\)\s+for update/i);
+  assert.match(sql, /pen_name_changed_at \+ interval '7 days'/i);
+  assert.match(
+    sql,
+    /grant execute on function public\.update_own_profile\(text, text\) to authenticated/i,
   );
 });
 
@@ -93,10 +101,42 @@ test("生产迁移先转换旧诗歌再添加目标约束", async () => {
   assert.match(migration, /commit;/i);
 });
 
+test("笔名迁移增加冷却字段、行锁 RPC 并保持列级权限", async () => {
+  const migration = await readFile(
+    new URL(
+      "../supabase/migrations/20260802_allow_weekly_pen_name_changes.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  assert.match(migration, /begin;/i);
+  assert.match(migration, /add column if not exists pen_name_changed_at timestamptz/i);
+  assert.match(migration, /where id = auth\.uid\(\)\s+for update/i);
+  assert.match(migration, /pen_name_changed_at \+ interval '7 days'/i);
+  assert.match(
+    migration,
+    /grant update\s*\(\s*bio,\s*updated_at\s*\)\s*on table public\.profiles to authenticated/i,
+  );
+  assert.match(
+    migration,
+    /grant execute on function public\.update_own_profile\(text, text\) to authenticated/i,
+  );
+  assert.match(migration, /commit;/i);
+});
+
 test("前端管理员推荐操作调用受保护 RPC", async () => {
   const source = await readFile(
     new URL("../js/data-service.mjs", import.meta.url),
     "utf8",
   );
   assert.match(source, /\.rpc\("set_work_featured"/);
+});
+
+test("前端资料更新调用笔名冷却 RPC", async () => {
+  const source = await readFile(
+    new URL("../js/data-service.mjs", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /\.rpc\("update_own_profile"/);
+  assert.match(source, /requested_pen_name:\s*penName/);
 });

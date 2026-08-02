@@ -1,5 +1,6 @@
 const STUDENT_NUMBER_PATTERN = /^20\d{8}$/;
 const AUTH_EMAIL_DOMAIN = "accounts.wenyuan.invalid";
+export const PEN_NAME_CHANGE_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
 
 export const CATEGORIES = Object.freeze([
   "全部", "新诗", "旧诗", "散文", "小说", "随笔", "其他",
@@ -44,6 +45,33 @@ export function formatDate(value) {
     month: "long",
     day: "numeric",
   }).format(date);
+}
+
+export function formatDateTime(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "时间未知";
+  return new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(date);
+}
+
+export function getPenNameChangeAvailability(lastChangedAt, now = Date.now()) {
+  const lastChanged = new Date(lastChangedAt).getTime();
+  if (!lastChangedAt || Number.isNaN(lastChanged)) {
+    return { canChange: true, nextChangeAt: null };
+  }
+  const current = new Date(now).getTime();
+  const nextChangeAt = new Date(lastChanged + PEN_NAME_CHANGE_INTERVAL_MS);
+  return {
+    canChange: !Number.isNaN(current) && current >= nextChangeAt.getTime(),
+    nextChangeAt: nextChangeAt.toISOString(),
+  };
 }
 
 export function createExcerpt(value, limit = 96) {
