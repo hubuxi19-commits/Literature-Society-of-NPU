@@ -59,3 +59,28 @@ test("localhost 加载本地 Supabase 配置并强制标记 staging", async () =
   });
   assert.ok(Object.isFrozen(config));
 });
+
+test("本地主机无法加载配置时降级到 demo 而不使用生产 Supabase", async () => {
+  for (const hostname of ["localhost", "127.0.0.1"]) {
+    const config = await loadConfig({
+      hostname,
+      productionConfig,
+      loadLocalConfig: async () => {
+        throw new SyntaxError("invalid local config");
+      },
+    });
+
+    assert.deepEqual(config, {
+      mode: "demo",
+      environment: "demo",
+      supabaseUrl: "",
+      supabasePublishableKey: "",
+      turnstileSiteKey: "",
+    });
+    assert.notEqual(config.supabaseUrl, productionConfig.supabaseUrl);
+    assert.notEqual(
+      config.supabasePublishableKey,
+      productionConfig.supabasePublishableKey,
+    );
+  }
+});
