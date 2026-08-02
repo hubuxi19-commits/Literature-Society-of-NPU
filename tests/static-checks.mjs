@@ -8,6 +8,7 @@ test("HTML 使用独立样式和模块脚本并包含可访问弹窗", async () 
   assert.match(html, /type="module" src="\.\/js\/app\.js"/);
   assert.match(html, /<dialog[^>]+id="authDialog"/);
   assert.match(html, /<dialog[^>]+id="confirmDialog"/);
+  assert.match(html, /<dialog[^>]+id="profileDialog"/);
   assert.match(html, /aria-live="polite"/);
   assert.doesNotMatch(html, /service_role/i);
   assert.doesNotMatch(html, /<style[\s>]/i);
@@ -56,14 +57,25 @@ test("旧诗歌分类在公开作品信息中规范化显示", async () => {
   );
 });
 
-test("作者资料表单将笔名设为只读并仅保存简介", async () => {
-  const app = await readFile(new URL("../js/app.js", import.meta.url), "utf8");
-  assert.match(app, /笔名由注册时确定，暂不支持修改。/);
-  assert.match(app, /text:\s*"保存简介"/);
+test("作者资料通过弹窗按冷却状态修改笔名和简介", async () => {
+  const [app, css] = await Promise.all([
+    readFile(new URL("../js/app.js", import.meta.url), "utf8"),
+    readFile(new URL("../assets/styles.css", import.meta.url), "utf8"),
+  ]);
+  assert.match(app, /function\s+openProfileEditor\s*\(/);
+  assert.match(app, /action:\s*"open-profile-editor"/);
+  assert.match(app, /action:\s*"close-profile-editor"/);
+  assert.match(app, /name:\s*"penName"/);
+  assert.match(app, /disabled:\s*!penNameAvailability\.canChange/);
+  assert.match(app, /笔名每七天最多修改一次/);
+  assert.match(app, /text:\s*"保存公开资料"/);
   assert.match(
     app,
-    /service\.updateProfile\(form\.dataset\.profileId,\s*\{\s*bio:\s*data\.get\("bio"\),\s*\}\)/s,
+    /service\.updateProfile\(form\.dataset\.profileId,\s*\{\s*penName:[\s\S]+?bio:\s*data\.get\("bio"\)/,
   );
+  assert.match(css, /\.profile-dialog \.profile-form input\s*\{[\s\S]*?padding:\s*0\.2rem 0 0\.5rem/);
+  assert.match(css, /\.profile-dialog \.profile-form textarea\s*\{[\s\S]*?border:\s*1px solid var\(--rule-light\)/);
+  assert.match(css, /\.profile-dialog-actions\s*\{[\s\S]*?justify-content:\s*flex-end/);
 });
 
 test("样式包含视觉令牌、键盘焦点、减少动效和移动端断点", async () => {

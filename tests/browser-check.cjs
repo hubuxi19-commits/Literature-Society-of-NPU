@@ -497,12 +497,30 @@ async function desktopFlow(browser, browserMessages) {
   }
 
   await goToHash(page, "#/authors/profile-pine", "松声");
-  const profileForm = page.locator("#profileForm");
-  await expectVisible(profileForm, "本人公开资料表单");
-  if (await profileForm.locator('input[name="penName"]').count()) {
-    throw new Error("公开资料表单仍提供可编辑笔名输入框");
+  if (await page.locator("#profileForm").count()) {
+    throw new Error("个人主页直接展示了资料表单");
   }
+  await page.getByRole("button", { name: "编辑资料" }).click();
+  await expectVisible(page.locator("#profileDialog"), "编辑资料窗口");
+  const profileForm = page.locator("#profileForm");
+  await expectVisible(profileForm, "编辑资料表单");
+  const penNameInput = profileForm.locator('input[name="penName"]');
+  await expectVisible(penNameInput, "笔名输入框");
+  if (await penNameInput.isDisabled()) throw new Error("首次笔名修改被错误锁定");
   await expectVisible(profileForm.locator('textarea[name="bio"]'), "简介输入框");
+  await penNameInput.fill("听松");
+  await profileForm.getByRole("button", { name: "保存公开资料" }).click();
+  await page.getByRole("heading", { name: "听松", exact: true }).waitFor();
+  await page.locator("#profileDialog").waitFor({ state: "hidden" });
+  await page.getByRole("button", { name: "编辑资料" }).click();
+  const lockedPenNameInput = page.locator('#profileForm input[name="penName"]');
+  await expectVisible(lockedPenNameInput, "冷却中的笔名输入框");
+  if (!(await lockedPenNameInput.isDisabled())) {
+    throw new Error("修改笔名后没有进入七天冷却");
+  }
+  if ((await page.locator("#accountButton").textContent()) !== "听松") {
+    throw new Error("修改笔名后顶部账户名没有同步");
+  }
   const profileText = await page.locator("main").innerText();
   if (/20\d{8}/.test(profileText)) {
     throw new Error("作者主页展示了完整学号");
@@ -846,7 +864,11 @@ async function mobileProfileAuthFlow(browser, browserMessages) {
 
 (async () => {
   const browserMessages = [];
-  const browser = await chromium.launch({ headless: true });
+  const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE;
+  const browser = await chromium.launch({
+    headless: true,
+    ...(executablePath ? { executablePath } : {}),
+  });
   try {
     const desktopScreenshots = await desktopFlow(browser, browserMessages);
     const mobileScreenshots = await mobileFlow(browser, browserMessages);

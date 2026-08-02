@@ -5,6 +5,9 @@ import {
   validatePassword,
   studentNumberToAuthEmail,
   formatDate,
+  formatDateTime,
+  getPenNameChangeAvailability,
+  PEN_NAME_CHANGE_INTERVAL_MS,
   createExcerpt,
   countChineseText,
   buildCommentTree,
@@ -61,6 +64,29 @@ test("密码必须同时包含字母和数字且不少于八位", () => {
 test("日期格式稳定且空值显示未记录", () => {
   assert.equal(formatDate(""), "未记录");
   assert.match(formatDate("2026-07-30T08:09:00+08:00"), /^2026年7月30日$/);
+});
+
+test("笔名修改在完整七天后重新开放", () => {
+  const changedAt = "2026-08-01T10:00:00+08:00";
+  const changedAtMs = new Date(changedAt).getTime();
+  assert.deepEqual(getPenNameChangeAvailability(null, changedAtMs), {
+    canChange: true,
+    nextChangeAt: null,
+  });
+  assert.equal(
+    getPenNameChangeAvailability(
+      changedAt,
+      changedAtMs + PEN_NAME_CHANGE_INTERVAL_MS - 1,
+    ).canChange,
+    false,
+  );
+  const available = getPenNameChangeAvailability(
+    changedAt,
+    changedAtMs + PEN_NAME_CHANGE_INTERVAL_MS,
+  );
+  assert.equal(available.canChange, true);
+  assert.equal(available.nextChangeAt, "2026-08-08T02:00:00.000Z");
+  assert.match(formatDateTime(available.nextChangeAt), /2026年8月8日.*10:00/);
 });
 
 test("摘要压缩空白并限制长度", () => {

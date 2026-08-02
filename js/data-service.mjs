@@ -1,6 +1,7 @@
 import { demoSeed } from "./demo-data.mjs";
 import {
   createExcerpt,
+  getPenNameChangeAvailability,
   PUBLISHABLE_CATEGORIES,
   studentNumberToAuthEmail,
   validatePassword,
@@ -38,9 +39,14 @@ function requirePublishableCategory(value) {
   return category;
 }
 
-function createDemoService() {
+function createDemoService(config = {}) {
   const state = clone(demoSeed);
+  state.profiles.forEach((profile) => {
+    profile.pen_name_changed_at ??= null;
+  });
   let session = null;
+  const now = () =>
+    new Date(typeof config.now === "function" ? config.now() : Date.now());
 
   const getProfileRecord = (profileId) =>
     state.profiles.find((profile) => profile.id === profileId);
@@ -119,14 +125,15 @@ function createDemoService() {
       ) {
         throw new Error("该学号已经注册");
       }
-      const now = new Date().toISOString();
+      const createdAt = now().toISOString();
       const profile = {
         id: makeId("profile"),
         pen_name: requireText(penName, "笔名", 24),
         bio: "",
         role: "member",
-        created_at: now,
-        updated_at: now,
+        pen_name_changed_at: null,
+        created_at: createdAt,
+        updated_at: createdAt,
       };
       state.profiles.push(profile);
       state.accounts.push({
@@ -302,13 +309,26 @@ function createDemoService() {
 
     async updateProfile(profileId, input) {
       const current = requireSession();
-      if (current.profile.id !== profileId && !isAdmin()) {
+      if (current.profile.id !== profileId) {
         throw new Error("没有权限修改该资料");
       }
       const profile = getProfileRecord(profileId);
       if (!profile) throw new Error("作者不存在");
+      const penName = requireText(input.penName ?? profile.pen_name, "笔名", 24);
+      const changedAt = now();
+      if (penName !== profile.pen_name) {
+        const availability = getPenNameChangeAvailability(
+          profile.pen_name_changed_at,
+          changedAt,
+        );
+        if (!availability.canChange) {
+          throw new Error("笔名每七天只能修改一次，请在冷却期结束后再试");
+        }
+        profile.pen_name = penName;
+        profile.pen_name_changed_at = changedAt.toISOString();
+      }
       profile.bio = String(input.bio ?? "").trim().slice(0, 240);
-      profile.updated_at = new Date().toISOString();
+      profile.updated_at = changedAt.toISOString();
       if (current.profile.id === profileId) {
         session.profile = clone(profile);
       }
@@ -620,18 +640,21 @@ function createSupabaseService(config) {
       if (current.profile.id !== profileId) {
         throw new Error("没有权限修改该资料");
       }
+      const penName = requireText(
+        input.penName ?? current.profile.pen_name,
+        "笔名",
+        24,
+      );
       const client = await getClient();
-      const { data, error } = await client
-        .from("profiles")
-        .update({
-          bio: String(input.bio ?? "").trim().slice(0, 240),
-        })
-        .eq("id", profileId)
-        .select("*")
-        .single();
+      const { data, error } = await client.rpc("update_own_profile", {
+        requested_pen_name: penName,
+        requested_bio: String(input.bio ?? "").trim().slice(0, 240),
+      });
       if (error) throw new Error(error.message);
-      cachedSession.profile = data;
-      return data;
+      const profile = Array.isArray(data) ? data[0] : data;
+      if (!profile) throw new Error("公开资料没有更新");
+      cachedSession.profile = profile;
+      return profile;
     },
 
     async getSiteSettings() {
@@ -665,5 +688,5 @@ export function createDataService(config = {}) {
     Boolean(config.supabaseAnonKey);
   return hasRemoteConfig
     ? createSupabaseService(config)
-    : createDemoService();
+    : createDemoService(config);
 }

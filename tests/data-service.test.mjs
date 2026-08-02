@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createDataService } from "../js/data-service.mjs";
+import { PEN_NAME_CHANGE_INTERVAL_MS } from "../js/utils.mjs";
 
 test("演示成员可以登录、发布、点赞、回复和删除自己的内容", async () => {
   const service = createDataService({ mode: "demo" });
@@ -78,6 +79,7 @@ test("注册不会把学号写入公开资料且会话可以退出", async () =>
     "created_at",
     "id",
     "pen_name",
+    "pen_name_changed_at",
     "role",
     "updated_at",
   ]);
@@ -95,20 +97,48 @@ test("作品列表提供作者、点赞和评论聚合字段", async () => {
   assert.equal(typeof works[0].liked_by_current_user, "boolean");
 });
 
-test("作者只能修改自己的公开简介", async () => {
-  const service = createDataService({ mode: "demo" });
+test("作者首次可改笔名且七天内只能继续修改简介", async () => {
+  let now = new Date("2026-08-01T10:00:00+08:00").getTime();
+  const service = createDataService({ mode: "demo", now: () => now });
   const session = await service.signIn({
     studentNumber: "2023123456",
     password: "wenyuan88",
   });
-  const originalPenName = session.profile.pen_name;
   const profile = await service.updateProfile(session.profile.id, {
     bio: "在夜里写作。",
-    pen_name: "不应生效",
+    penName: "听松",
   });
-  assert.equal(profile.pen_name, originalPenName);
+  assert.equal(profile.pen_name, "听松");
   assert.equal(profile.bio, "在夜里写作。");
+  assert.equal(profile.pen_name_changed_at, "2026-08-01T02:00:00.000Z");
   assert.equal(profile.role, "member");
+
+  await assert.rejects(
+    () =>
+      service.updateProfile(session.profile.id, {
+        bio: "新的简介。",
+        penName: "再听松",
+      }),
+    /每七天只能修改一次/,
+  );
+  const bioOnly = await service.updateProfile(session.profile.id, {
+    bio: "新的简介。",
+    penName: "听松",
+  });
+  assert.equal(bioOnly.pen_name, "听松");
+  assert.equal(bioOnly.bio, "新的简介。");
+
+  now += PEN_NAME_CHANGE_INTERVAL_MS;
+  const changedAgain = await service.updateProfile(session.profile.id, {
+    bio: "新的简介。",
+    penName: "松间",
+  });
+  assert.equal(changedAgain.pen_name, "松间");
+  assert.equal(
+    (await service.listWorks()).find((work) => work.author_id === session.profile.id)
+      .author_pen_name,
+    "松间",
+  );
 });
 
 test("演示服务拒绝发布分类集合之外的作品分类", async () => {

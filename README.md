@@ -16,7 +16,7 @@
 - 评论、回复和软删除评论。
 - 独立长文阅读页。
 - 独立写作台和浏览器本地草稿。
-- 作者主页与资料编辑（注册后笔名只读，只能保存个人简介）。
+- 作者主页与资料编辑（笔名每七天最多修改一次，简介可随时保存）。
 - 普通成员与管理员权限区分。
 - 管理员删除内容和维护编辑推荐。
 - 桌面端、平板与移动端响应式布局；移动首页每次聚焦一张作品卡，左滑下一篇、右滑上一篇。
@@ -45,7 +45,8 @@
 ├─ supabase/
 │  ├─ schema.sql
 │  └─ migrations/
-│     └─ 20260731_split_poetry_categories_and_lock_pen_name.sql
+│     ├─ 20260731_split_poetry_categories_and_lock_pen_name.sql
+│     └─ 20260802_allow_weekly_pen_name_changes.sql
 ├─ tests/
 │  ├─ browser-check.cjs
 │  ├─ data-service.test.mjs
@@ -204,13 +205,14 @@ order by tablename, policyname;
 
 如果某个写操作在隐藏按钮后仍可通过浏览器控制台直接执行，且数据库没有拒绝，请不要上线。
 
-### 6. 升级已有项目：先迁移分类和笔名权限
+### 6. 升级已有项目：迁移分类和每周笔名修改
 
 新建项目直接执行最新的 `supabase/schema.sql` 即可。已有项目必须在发布本次前端前，在同一个 Supabase 项目的 SQL Editor 中按以下顺序操作；本仓库**不表示该迁移已在任何生产项目执行**。
 
 1. 先确认准备维护的 Supabase 项目正确，并为现有数据保留可恢复备份。
-2. 打开并完整执行 [`supabase/migrations/20260731_split_poetry_categories_and_lock_pen_name.sql`](./supabase/migrations/20260731_split_poetry_categories_and_lock_pen_name.sql)。该事务会把 `works.category = '诗歌'` 更新为 `新诗`，替换分类约束，并撤销普通登录用户对 `profiles.pen_name` 的更新权限，仅授予 `bio` 与 `updated_at` 的列更新权限。
-3. 在同一 SQL Editor 中执行以下验证查询：
+2. 打开并完整执行 [`supabase/migrations/20260731_split_poetry_categories_and_lock_pen_name.sql`](./supabase/migrations/20260731_split_poetry_categories_and_lock_pen_name.sql)。该事务会把 `works.category = '诗歌'` 更新为 `新诗`，替换分类约束，并撤销普通登录用户直接更新 `profiles.pen_name` 的权限。
+3. 接着执行 [`supabase/migrations/20260802_allow_weekly_pen_name_changes.sql`](./supabase/migrations/20260802_allow_weekly_pen_name_changes.sql)。该事务会增加 `pen_name_changed_at`，并创建带行锁的 `update_own_profile` RPC。成员仍不能直接更新 `pen_name`，只能通过 RPC 每七天修改一次；简介不受冷却限制。
+4. 在同一 SQL Editor 中执行以下验证查询：
 
 ```sql
 select category, count(*)
@@ -219,8 +221,8 @@ group by category
 order by category;
 ```
 
-4. 结果中不得出现 `诗歌`；只应出现 `新诗`、`旧诗`、`散文`、`小说`、`随笔`、`其他` 中实际有数据的分类。若仍出现 `诗歌` 或 SQL 执行报错，停止发布并先处理数据库问题。
-5. 仅在查询通过后，继续下面的前端发布步骤。
+5. 结果中不得出现 `诗歌`；只应出现 `新诗`、`旧诗`、`散文`、`小说`、`随笔`、`其他` 中实际有数据的分类。若仍出现 `诗歌` 或 SQL 执行报错，停止发布并先处理数据库问题。
+6. 仅在两项迁移和查询都通过后，继续下面的前端发布步骤。
 
 迁移与前端发布应安排在同一维护窗口：新前端投稿允许“新诗”和“旧诗”，旧分类约束会拒绝这些投稿。前端保留旧“诗歌”显示为“新诗”的兼容映射，但这不是跳过数据库迁移的替代方案。
 
@@ -284,7 +286,7 @@ npm test
 
 移动首页在宽度不超过 760px 时显示一张作品卡。横向滑动超过 56px 且明显强于纵向移动时，左滑进入下一篇，右滑返回本次队列的上一篇；点按卡片进入完整阅读页。
 
-个人主页中的笔名保持只读；资料表单只提交简介。数据库层通过列级 `GRANT` 限制普通登录用户只能更新 `bio` 和 `updated_at`，并非仅隐藏笔名输入框。
+个人主页允许成员修改自己的笔名和简介。首次可立即修改笔名，之后每次实际改名都会进入七天冷却；冷却期间仍可保存简介。数据库继续通过列级 `GRANT` 禁止直接更新 `pen_name`，由带行锁的 `update_own_profile` RPC 执行频率限制，前端禁用状态不是安全边界。
 
 阅读页的“生成作品图片”在浏览器本地离屏排版并生成 PNG，不上传作品内容。每页固定为 1080 × 1920px；长作品会分页，文件名依次为 `作品标题-作者-01.png`、`作品标题-作者-02.png`。右下角字样来自本地 `assets/student-literature-society-wordmark.png`。
 
@@ -341,7 +343,7 @@ git push origin main
 
 - [ ] 确认旧版保存过明文登录凭据的表已停用，相关账户需要更换密码。
 - [ ] 在真实 Supabase 项目执行并复核 `schema.sql`。
-- [ ] 对已有项目执行并验证 `supabase/migrations/20260731_split_poetry_categories_and_lock_pen_name.sql`，确认查询结果不含 `诗歌`。
+- [ ] 对已有项目依次执行 `20260731_split_poetry_categories_and_lock_pen_name.sql` 与 `20260802_allow_weekly_pen_name_changes.sql`，并确认分类查询不含 `诗歌`。
 - [ ] 确认五张业务表的 RLS 全部为 `true`。
 - [ ] 用未登录、普通成员和管理员三种身份进行越权测试。
 - [ ] 确认前端只有 URL 和 `anon` 密钥。
