@@ -10,6 +10,7 @@
     "test": "npm run test:unit && npm run test:browser"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.4",
     "playwright": "latest"
   }
 }
