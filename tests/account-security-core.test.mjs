@@ -290,33 +290,39 @@ test("Turnstile 网络与 JSON 失败不泄露 token、secret、provider body �
 });
 
 test("Turnstile 非 2xx 即使 body 声称成功也 fail closed", async () => {
-  await withEdgeRuntime({
-    env: { TURNSTILE_SECRET_KEY: "fake-turnstile-secret" },
-    fetchImpl: async () => new Response(
-      '{"success":true,"challenge_ts":"2026-08-02T00:00:00Z"}',
-      { status: 502, headers: { "content-type": "application/json" } },
-    ),
-  }, async () => {
-    await assert.rejects(
-      verifyTurnstile("captcha-token", "request-http-failure"),
-      { message: "人机验证失败，请刷新后重试" },
-    );
+  const emissions = await captureConsole(async () => {
+    await withEdgeRuntime({
+      env: { TURNSTILE_SECRET_KEY: "fake-turnstile-http-secret" },
+      fetchImpl: async () => new Response(
+        '{"success":true,"detail":"provider-private-http-body"}',
+        { status: 502, headers: { "content-type": "application/json" } },
+      ),
+    }, async () => {
+      await assert.rejects(
+        verifyTurnstile("captcha-private-http-token", "request-http-failure"),
+        { message: "人机验证失败，请刷新后重试" },
+      );
+    });
   });
+  assert.deepEqual(emissions, []);
 });
 
 test("Turnstile 2xx 但 success 不为 true 时 fail closed", async () => {
-  await withEdgeRuntime({
-    env: { TURNSTILE_SECRET_KEY: "fake-turnstile-secret" },
-    fetchImpl: async () => new Response(
-      '{"success":false,"error-codes":["invalid-input-response"]}',
-      { status: 200, headers: { "content-type": "application/json" } },
-    ),
-  }, async () => {
-    await assert.rejects(
-      verifyTurnstile("captcha-token", "request-field-failure"),
-      { message: "人机验证失败，请刷新后重试" },
-    );
+  const emissions = await captureConsole(async () => {
+    await withEdgeRuntime({
+      env: { TURNSTILE_SECRET_KEY: "fake-turnstile-field-secret" },
+      fetchImpl: async () => new Response(
+        '{"success":false,"detail":"provider-private-field-body"}',
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    }, async () => {
+      await assert.rejects(
+        verifyTurnstile("captcha-private-field-token", "request-field-failure"),
+        { message: "人机验证失败，请刷新后重试" },
+      );
+    });
   });
+  assert.deepEqual(emissions, []);
 });
 
 test("Turnstile 空 token 和缺 secret 不产生任何 console 输出", async () => {
