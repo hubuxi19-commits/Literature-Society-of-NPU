@@ -184,6 +184,30 @@ export function createAccountStore(client: SupabaseClientLike) {
       return mapToken(Array.isArray(data) ? data[0] : data);
     },
 
+
+    async restoreConsumedToken({ tokenId, consumedAttemptCount }: {
+      tokenId: string;
+      consumedAttemptCount: number;
+    }) {
+      if (
+        typeof tokenId !== "string" ||
+        tokenId.trim() === "" ||
+        !Number.isInteger(consumedAttemptCount) ||
+        consumedAttemptCount < 1
+      ) throw new AccountStoreError("storage_unavailable");
+      const { data, error } = await client
+        .from("account_action_tokens")
+        .update({
+          used_at: null,
+          attempt_count: consumedAttemptCount - 1,
+        })
+        .eq("id", tokenId)
+        .not("used_at", "is", null)
+        .eq("attempt_count", consumedAttemptCount)
+        .select("id")
+        .maybeSingle();
+      if (error || !data) throwStoreError(error);
+    },
     async upsertRecoveryEmail({ userId, emailNormalized, verifiedAt }: {
       userId: string;
       emailNormalized: string;

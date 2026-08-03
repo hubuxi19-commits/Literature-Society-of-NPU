@@ -8,10 +8,12 @@ import {
 import {
   buildAdminClientOptions,
   buildUserClientOptions,
+  createSupabaseRequestClients,
   parseSupabaseSecretKeys,
 } from "../supabase/functions/_shared/clients-core.mjs";
 import { createAccountStore } from "../supabase/functions/_shared/account-store.ts";
 
+import { createTrustedDenoServeHandler } from "../supabase/functions/_shared/edge-runtime.mjs";
 const USER_ID = "10000000-0000-4000-8000-000000000001";
 const OTHER_USER_ID = "10000000-0000-4000-8000-000000000002";
 const NOW = new Date("2026-08-02T08:00:00.000Z");
@@ -68,7 +70,7 @@ class MemoryAccountStore {
     this.recoveryByUser = new Map();
     this.tokens = [];
     this.nextTokenId = 1;
-    this.rateLimitResults = [true, true, true];
+    this.rateLimitResults = [true, true, true, true, true];
   }
 
   async getRecoveryEmail(userId) {
@@ -154,6 +156,16 @@ class MemoryAccountStore {
     return { ...token };
   }
 
+  async restoreConsumedToken({ tokenId, consumedAttemptCount }) {
+    this.events.push(["restore-token", tokenId, consumedAttemptCount]);
+    const token = this.tokens.find(({ id }) => id === tokenId);
+    if (!token || token.usedAt === null || token.attemptCount !== consumedAttemptCount) {
+      throw new Error("restore target mismatch");
+    }
+    token.usedAt = null;
+    token.attemptCount -= 1;
+  }
+
   async upsertRecoveryEmail({ userId, emailNormalized, verifiedAt }) {
     this.events.push(["upsert-recovery", userId, emailNormalized, verifiedAt]);
     if (await this.isEmailOwnedByAnother({ emailNormalized, userId })) {
@@ -181,18 +193,26 @@ class MemoryAccountStore {
   }
 }
 
-function createHarness({ captchaFailure = false, sendFailure = false } = {}) {
+function createHarness({
+  captchaFailure = false,
+  sendFailure = false,
+  sendFailurePurposes = [],
+  trustedNetworkIdentity = "198.51.100.24",
+  sendFailureOncePurposes = [],
+  serverRequestId = "req_public_123",
+} = {}) {
   const events = [];
   const sent = [];
   const logs = [];
   const store = new MemoryAccountStore(events);
   const codes = ["123456", "654321", "111111"];
+  const pendingSendFailures = new Set(sendFailureOncePurposes);
   const handler = createAccountEmailHandler({
     store,
     allowedOrigins: [ORIGIN],
     now: () => new Date(NOW),
     createCode: () => codes.shift(),
-    createRequestId: () => "req_public_123",
+    createRequestId: () => serverRequestId,
     tokenPepper: "test-token-pepper",
     rateLimitPepper: "test-rate-pepper",
     verifyTurnstile: async (token, requestId) => {
@@ -202,13 +222,21 @@ function createHarness({ captchaFailure = false, sendFailure = false } = {}) {
     },
     sendSecurityEmail: async (message) => {
       events.push(["send-email", { ...message }]);
-      if (sendFailure) throw new Error("provider exposed recipient");
+      if (sendFailure || sendFailurePurposes.includes(message.purpose)) {
+        throw new Error("provider exposed recipient");
+      }
+      if (pendingSendFailures.delete(message.purpose)) {
+        throw new Error("provider exposed recipient once");
+      }
       sent.push({ ...message });
       return { messageId: `message-${sent.length}` };
     },
     logger: (entry) => logs.push(entry),
   });
-  return { events, handler, logs, sent, store };
+  const actionHandler = handler;
+  const trustedHandler = (incomingRequest, context = {}) =>
+    actionHandler(incomingRequest, { trustedNetworkIdentity, ...context });
+  return { events, handler: trustedHandler, logs, sent, store };
 }
 
 test("status exposes only the four public states and masked timing data", async () => {
@@ -300,7 +328,7 @@ test("request-bind validates auth and email before every external check", async 
   assert.deepEqual(events, []);
 });
 
-test("request-bind performs captcha, three digest limits, uniqueness, invalidation, insert, then send", async () => {
+test("request-bind consumes cooldown and daily send buckets before persistence", async () => {
   const { events, handler, sent, store } = createHarness();
   const response = await handler(request({
     action: "request-bind",
@@ -316,6 +344,8 @@ test("request-bind performs captcha, three digest limits, uniqueness, invalidati
       "rate-limit",
       "rate-limit",
       "rate-limit",
+      "rate-limit",
+      "rate-limit",
       "unique-check",
       "get-recovery",
       "invalidate",
@@ -324,7 +354,46 @@ test("request-bind performs captcha, three digest limits, uniqueness, invalidati
     ],
   );
   const rateCalls = events.filter(([name]) => name === "rate-limit");
-  assert.deepEqual(rateCalls.map(([, input]) => input.scope), ["user", "email", "ip"]);
+  assert.deepEqual(
+    rateCalls.map(([, input]) => ({
+      action: input.action,
+      scope: input.scope,
+      windowSeconds: input.windowSeconds,
+      maxRequests: input.maxRequests,
+    })),
+    [
+      {
+        action: "bind_email:account_cooldown",
+        scope: "account",
+        windowSeconds: 60,
+        maxRequests: 1,
+      },
+      {
+        action: "bind_email:email_cooldown",
+        scope: "email",
+        windowSeconds: 60,
+        maxRequests: 1,
+      },
+      {
+        action: "bind_email:account_daily",
+        scope: "account",
+        windowSeconds: 86400,
+        maxRequests: 3,
+      },
+      {
+        action: "bind_email:email_daily",
+        scope: "email",
+        windowSeconds: 86400,
+        maxRequests: 3,
+      },
+      {
+        action: "bind_email:network_daily",
+        scope: "network",
+        windowSeconds: 86400,
+        maxRequests: 20,
+      },
+    ],
+  );
   for (const [, input] of rateCalls) {
     assert.match(input.keyDigest, /^[a-f0-9]{64}$/);
     assert.doesNotMatch(input.keyDigest, /person|203\.0\.113|10000000/);
@@ -342,7 +411,7 @@ test("request-bind performs captcha, three digest limits, uniqueness, invalidati
 
 test("request-bind consumes all rate-limit buckets and returns a generic 429", async () => {
   const { events, handler, store } = createHarness();
-  store.rateLimitResults = [true, false, true];
+  store.rateLimitResults = [true, false, true, true, true];
   const response = await handler(request({
     action: "request-bind",
     email: "person@example.com",
@@ -352,9 +421,61 @@ test("request-bind consumes all rate-limit buckets and returns a generic 429", a
   assert.equal((await bodyOf(response)).error.code, "rate_limited");
   assert.deepEqual(
     events.map(([name]) => name),
-    ["turnstile", "rate-limit", "rate-limit", "rate-limit"],
+    [
+      "turnstile",
+      "rate-limit",
+      "rate-limit",
+      "rate-limit",
+
+      "rate-limit",
+      "rate-limit",
+    ],
   );
   assert.equal(store.tokens.length, 0);
+});
+
+test("send limits derive network digest only from trusted server connection identity", async () => {
+  const first = createHarness({ trustedNetworkIdentity: "198.51.100.24" });
+  let response = await first.handler(request({
+    action: "request-bind",
+    email: "person@example.com",
+    captchaToken: "captcha-bind",
+  }, {
+    headers: {
+      "cf-connecting-ip": "203.0.113.1",
+      "x-forwarded-for": "203.0.113.2",
+    },
+  }), { userClaims: claims() });
+  assert.equal(response.status, 200);
+
+  const second = createHarness({ trustedNetworkIdentity: "198.51.100.24" });
+  response = await second.handler(request({
+    action: "request-bind",
+    email: "person@example.com",
+    captchaToken: "captcha-bind",
+  }, {
+    headers: {
+      "cf-connecting-ip": "192.0.2.1",
+      "x-forwarded-for": "192.0.2.2",
+    },
+  }), { userClaims: claims() });
+  assert.equal(response.status, 200);
+
+  const third = createHarness({ trustedNetworkIdentity: "198.51.100.99" });
+  response = await third.handler(request({
+    action: "request-bind",
+    email: "person@example.com",
+    captchaToken: "captcha-bind",
+  }), { userClaims: claims() });
+  assert.equal(response.status, 200);
+
+  const digestFor = ({ events }) => {
+    const call = events.find(([, input]) => input?.scope === "network");
+    assert.ok(call, "network daily bucket must be consumed");
+    return call[1].keyDigest;
+  };
+  assert.equal(digestFor(first), digestFor(second));
+  assert.notEqual(digestFor(first), digestFor(third));
 });
 
 test("request-bind compensates a delivery failure by consuming the inserted token", async () => {
@@ -504,6 +625,38 @@ test("request-change requires a verified email and a JWT issued within five minu
     captchaToken: "captcha-change",
   }), { userClaims: claims({ iat: Math.floor(NOW.getTime() / 1000) - 300 }) });
   assert.equal(response.status, 200);
+  assert.deepEqual(
+    events
+      .filter(([name]) => name === "rate-limit")
+      .map(([, input]) => input.action),
+    ["change_email_old:account_cooldown", "change_email_old:email_cooldown",
+      "change_email_old:account_daily", "change_email_old:email_daily",
+      "change_email_old:network_daily"],
+  );
+});
+
+test("request-change rejects missing, future, and nonnumeric JWT iat", async () => {
+  for (const issuedAt of [
+    undefined,
+    Math.floor(NOW.getTime() / 1000) + 1,
+    "not-a-number",
+  ]) {
+    const { events, handler, store } = createHarness();
+    store.recoveryByUser.set(USER_ID, {
+      emailNormalized: "person@example.com",
+      verifiedAt: NOW.toISOString(),
+    });
+    const response = await handler(request({
+      action: "request-change",
+      newEmail: "next@example.net",
+      captchaToken: "captcha-change",
+    }), { userClaims: claims({ iat: issuedAt }) });
+    const body = await bodyOf(response);
+    assert.equal(response.status, 401);
+    assert.equal(body.error.code, "recent_login_required");
+    assert.equal(events.some(([name]) => name === "turnstile"), false);
+    assert.doesNotMatch(JSON.stringify(body), /person@example\.com|next@example\.net/);
+  }
 });
 
 test("two-step change sends new code only after old code consumption and never updates auth email", async () => {
@@ -546,11 +699,24 @@ test("two-step change sends new code only after old code consumption and never u
   assert.deepEqual(events.map(([name]) => name), [
     "consume-token",
     "unique-check",
+    "rate-limit",
+    "rate-limit",
+    "rate-limit",
+    "rate-limit",
+    "rate-limit",
     "invalidate",
     "insert-token",
     "send-email",
   ]);
   assert.equal(sent.length, 2);
+  assert.deepEqual(
+    events
+      .filter(([name]) => name === "rate-limit")
+      .map(([, input]) => input.action),
+    ["change_email_new:account_cooldown", "change_email_new:email_cooldown",
+      "change_email_new:account_daily", "change_email_new:email_daily",
+      "change_email_new:network_daily"],
+  );
   assert.deepEqual(
     { to: sent[1].to, purpose: sent[1].purpose },
     { to: "next@example.net", purpose: "change_email_new" },
@@ -635,6 +801,66 @@ test("origin, method, JSON, action, and request IDs use one public error envelop
   assert.equal(response.headers.get("access-control-allow-origin"), ORIGIN);
   assert.match(response.headers.get("access-control-allow-headers"), /authorization/i);
   assert.match(response.headers.get("access-control-allow-headers"), /apikey/i);
+});
+
+test("browser CORS rejects missing Origin and accepts Supabase SDK headers", async () => {
+  const { handler } = createHarness();
+  let response = await handler(new Request("https://edge.example/account-email", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ action: "status" }),
+  }), { userClaims: claims() });
+  assert.equal(response.status, 403);
+  assert.equal((await bodyOf(response)).error.code, "origin_not_allowed");
+  assert.equal(response.headers.get("access-control-allow-origin"), null);
+
+  response = await handler(new Request("https://edge.example/account-email", {
+    method: "OPTIONS",
+    headers: {
+      origin: ORIGIN,
+      "access-control-request-headers":
+        "authorization, x-client-info, apikey, content-type",
+    },
+  }), {});
+  assert.equal(response.status, 204);
+  const allowedHeaders = response.headers
+    .get("access-control-allow-headers")
+    .split(",")
+    .map((value) => value.trim())
+    .sort();
+  assert.deepEqual(allowedHeaders, [
+    "apikey",
+    "authorization",
+    "content-type",
+    "x-client-info",
+  ]);
+});
+
+test("server request ID replaces even a valid caller UUID for response and providers", async () => {
+  const serverRequestId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+  const callerRequestId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const { events, handler } = createHarness({ serverRequestId });
+  const response = await handler(request({
+    action: "request-bind",
+    email: "person@example.com",
+    captchaToken: "captcha-bind",
+  }, {
+    headers: { "x-request-id": callerRequestId },
+  }), { userClaims: claims() });
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("x-request-id"), serverRequestId);
+  const turnstile = events.find(([name]) => name === "turnstile");
+  const delivery = events.find(([name]) => name === "send-email");
+  assert.equal(turnstile[2], serverRequestId);
+  assert.equal(delivery[1].requestId, serverRequestId);
+  assert.doesNotMatch(
+    JSON.stringify({
+      responseHeaders: Object.fromEntries(response.headers),
+      turnstile,
+      delivery,
+    }),
+    new RegExp(callerRequestId),
+  );
 });
 
 test("Supabase key parsing keeps user JWT bearer separate from API keys", () => {
@@ -734,4 +960,437 @@ test("Supabase function configuration enforces JWT only on account-email", async
   );
   assert.match(config, /\[functions\.account-email\]\s*verify_jwt\s*=\s*true/);
   assert.match(config, /\[functions\.password-recovery\]\s*verify_jwt\s*=\s*false/);
+});
+
+test("Deno serve adapter injects remote hostname and ignores forwarded IP headers", async () => {
+  const seen = [];
+  const serveHandler = createTrustedDenoServeHandler(
+    async (incomingRequest, serverContext) => {
+      seen.push({
+        forwarded: incomingRequest.headers.get("x-forwarded-for"),
+        serverContext,
+      });
+      return new Response(null, { status: 204 });
+    },
+  );
+  const response = await serveHandler(new Request("https://edge.example/account-email", {
+    method: "OPTIONS",
+    headers: {
+      origin: ORIGIN,
+      "x-forwarded-for": "203.0.113.99",
+      "cf-connecting-ip": "203.0.113.98",
+    },
+  }), { remoteAddr: { hostname: "198.51.100.24", port: 443 } });
+  assert.equal(response.status, 204);
+  assert.deepEqual(seen, [{
+    forwarded: "203.0.113.99",
+    serverContext: { trustedNetworkIdentity: "198.51.100.24" },
+  }]);
+});
+
+async function beginEmailChange(harness) {
+  harness.store.recoveryByUser.set(USER_ID, {
+    emailNormalized: "person@example.com",
+    verifiedAt: NOW.toISOString(),
+  });
+  const response = await harness.handler(request({
+    action: "request-change",
+    newEmail: "next@example.net",
+    captchaToken: "captcha-change",
+  }), { userClaims: claims() });
+  assert.equal(response.status, 200);
+  return harness.store.tokens.find(({ purpose }) => purpose === "change_email_old");
+}
+
+test("request-change old-email delivery failure invalidates its token without leakage", async () => {
+  const harness = createHarness({
+    sendFailurePurposes: ["change_email_old"],
+  });
+  harness.store.recoveryByUser.set(USER_ID, {
+    emailNormalized: "person@example.com",
+    verifiedAt: NOW.toISOString(),
+  });
+  const response = await harness.handler(request({
+    action: "request-change",
+    newEmail: "next@example.net",
+    captchaToken: "captcha-change",
+  }), { userClaims: claims() });
+  const body = await bodyOf(response);
+  const oldToken = harness.store.tokens.find(
+    ({ purpose }) => purpose === "change_email_old",
+  );
+  assert.equal(response.status, 502);
+  assert.equal(body.error.code, "delivery_failed");
+  assert.equal(oldToken.usedAt, NOW.toISOString());
+  assert.doesNotMatch(
+    JSON.stringify({ body, logs: harness.logs }),
+    /person@example\.com|next@example\.net|123456|token-1|10000000-0000/,
+  );
+});
+
+test("verify-bind restores the atomically consumed token when upsert fails", async () => {
+  const harness = createHarness();
+  await harness.handler(request({
+    action: "request-bind",
+    email: "person@example.com",
+    captchaToken: "captcha-bind",
+  }), { userClaims: claims() });
+  const token = harness.store.tokens[0];
+  harness.store.upsertRecoveryEmail = async () => {
+    harness.events.push(["upsert-failed"]);
+    const error = new Error("database leaked person@example.com");
+    error.code = "storage_unavailable";
+    throw error;
+  };
+  const response = await harness.handler(request({
+    action: "verify-bind",
+    code: "123456",
+  }), { userClaims: claims() });
+  const body = await bodyOf(response);
+  assert.equal(response.status, 503);
+  assert.equal(body.error.code, "storage_unavailable");
+  assert.equal(token.usedAt, null);
+  assert.equal(token.attemptCount, 0);
+  assert.deepEqual(
+    harness.events.slice(-3).map(([name]) => name),
+    ["consume-token", "upsert-failed", "restore-token"],
+  );
+  assert.doesNotMatch(
+    JSON.stringify({ body, logs: harness.logs }),
+    /person@example\.com|123456|token-1|10000000-0000/,
+  );
+});
+
+test("confirm-change-old restores its code after uniqueness or insert failure", async () => {
+  for (const scenario of ["uniqueness", "insert"]) {
+    const harness = createHarness();
+    const oldToken = await beginEmailChange(harness);
+    if (scenario === "uniqueness") {
+      harness.store.recoveryByUser.set(OTHER_USER_ID, {
+        emailNormalized: "next@example.net",
+        verifiedAt: NOW.toISOString(),
+      });
+    } else {
+      harness.store.insertToken = async () => {
+        harness.events.push(["insert-failed"]);
+        const error = new Error("insert leaked next@example.net");
+        error.code = "storage_unavailable";
+        throw error;
+      };
+    }
+    const response = await harness.handler(request({
+      action: "confirm-change-old",
+      code: "123456",
+    }), { userClaims: claims() });
+    const body = await bodyOf(response);
+    assert.equal(response.status, scenario === "uniqueness" ? 409 : 503);
+    assert.equal(
+      body.error.code,
+      scenario === "uniqueness" ? "email_unavailable" : "storage_unavailable",
+    );
+    assert.equal(oldToken.usedAt, null);
+    assert.equal(oldToken.attemptCount, 0);
+    assert.equal(
+      harness.store.tokens.some((token) =>
+        token.purpose === "change_email_new" && token.usedAt === null
+      ),
+      false,
+    );
+    assert.doesNotMatch(
+      JSON.stringify({ body, logs: harness.logs }),
+      /person@example\.com|next@example\.net|123456|token-1|10000000-0000/,
+    );
+  }
+});
+
+test("confirm-change-old marks failed new token used and retries the same old code", async () => {
+  const harness = createHarness({
+    sendFailureOncePurposes: ["change_email_new"],
+  });
+  const oldToken = await beginEmailChange(harness);
+  let response = await harness.handler(request({
+    action: "confirm-change-old",
+    code: "123456",
+  }), { userClaims: claims() });
+  let body = await bodyOf(response);
+  assert.equal(response.status, 502);
+  assert.equal(body.error.code, "delivery_failed");
+  assert.equal(oldToken.usedAt, null);
+  assert.equal(oldToken.attemptCount, 0);
+  const failedNewToken = harness.store.tokens.find(
+    ({ purpose }) => purpose === "change_email_new",
+  );
+  assert.equal(failedNewToken.usedAt, NOW.toISOString());
+  assert.doesNotMatch(
+    JSON.stringify({ body, logs: harness.logs }),
+    /person@example\.com|next@example\.net|123456|654321|token-|10000000-0000/,
+  );
+
+  response = await harness.handler(request({
+    action: "confirm-change-old",
+    code: "123456",
+  }), { userClaims: claims() });
+  assert.equal(response.status, 200);
+  assert.equal(oldToken.usedAt, NOW.toISOString());
+  assert.equal(oldToken.attemptCount, 1);
+  assert.equal(
+    harness.store.tokens.filter((token) =>
+      token.purpose === "change_email_new" && token.usedAt === null
+    ).length,
+    1,
+  );
+});
+
+test("confirm-change-new restores its code after uniqueness failure", async () => {
+  const harness = createHarness();
+  await beginEmailChange(harness);
+  let response = await harness.handler(request({
+    action: "confirm-change-old",
+    code: "123456",
+  }), { userClaims: claims() });
+  assert.equal(response.status, 200);
+  const newToken = harness.store.tokens.find(
+    ({ purpose }) => purpose === "change_email_new",
+  );
+  harness.store.recoveryByUser.set(OTHER_USER_ID, {
+    emailNormalized: "next@example.net",
+    verifiedAt: NOW.toISOString(),
+  });
+  response = await harness.handler(request({
+    action: "confirm-change-new",
+    code: "654321",
+  }), { userClaims: claims() });
+  const body = await bodyOf(response);
+  assert.equal(response.status, 409);
+  assert.equal(body.error.code, "email_unavailable");
+  assert.equal(newToken.usedAt, null);
+  assert.equal(newToken.attemptCount, 0);
+
+  harness.store.recoveryByUser.delete(OTHER_USER_ID);
+  response = await harness.handler(request({
+    action: "confirm-change-new",
+    code: "654321",
+  }), { userClaims: claims() });
+  assert.equal(response.status, 200);
+  assert.equal(
+    harness.store.recoveryByUser.get(USER_ID).emailNormalized,
+    "next@example.net",
+  );
+});
+
+test("confirm-change-new restores its code after update failure", async () => {
+  const harness = createHarness();
+  await beginEmailChange(harness);
+  let response = await harness.handler(request({
+    action: "confirm-change-old",
+    code: "123456",
+  }), { userClaims: claims() });
+  assert.equal(response.status, 200);
+  const newToken = harness.store.tokens.find(
+    ({ purpose }) => purpose === "change_email_new",
+  );
+  const updateRecoveryEmail = harness.store.updateRecoveryEmail.bind(harness.store);
+  harness.store.updateRecoveryEmail = async () => {
+    harness.events.push(["update-failed"]);
+    const error = new Error("update leaked next@example.net");
+    error.code = "storage_unavailable";
+    throw error;
+  };
+  response = await harness.handler(request({
+    action: "confirm-change-new",
+    code: "654321",
+  }), { userClaims: claims() });
+  const body = await bodyOf(response);
+  assert.equal(response.status, 503);
+  assert.equal(body.error.code, "storage_unavailable");
+  assert.equal(newToken.usedAt, null);
+  assert.equal(newToken.attemptCount, 0);
+  assert.doesNotMatch(
+    JSON.stringify({ body, logs: harness.logs }),
+    /person@example\.com|next@example\.net|654321|token-|10000000-0000/,
+  );
+
+  harness.store.updateRecoveryEmail = updateRecoveryEmail;
+  response = await harness.handler(request({
+    action: "confirm-change-new",
+    code: "654321",
+  }), { userClaims: claims() });
+  assert.equal(response.status, 200);
+});
+
+test("confirm-change-new restores after an update-time email conflict", async () => {
+  const harness = createHarness();
+  await beginEmailChange(harness);
+  let response = await harness.handler(request({
+    action: "confirm-change-old",
+    code: "123456",
+  }), { userClaims: claims() });
+  assert.equal(response.status, 200);
+
+  const newToken = harness.store.tokens.find(
+    ({ purpose }) => purpose === "change_email_new",
+  );
+  const updateRecoveryEmail = harness.store.updateRecoveryEmail.bind(harness.store);
+  harness.store.updateRecoveryEmail = async () => {
+    const error = new Error("recovery email already belongs to another user");
+    error.code = "email_conflict";
+    throw error;
+  };
+
+  response = await harness.handler(request({
+    action: "confirm-change-new",
+    code: "654321",
+  }), { userClaims: claims() });
+  const body = await bodyOf(response);
+  assert.equal(response.status, 409);
+  assert.equal(body.error.code, "email_unavailable");
+  assert.equal(newToken.usedAt, null);
+  assert.equal(newToken.attemptCount, 0);
+
+  harness.store.updateRecoveryEmail = updateRecoveryEmail;
+  response = await harness.handler(request({
+    action: "confirm-change-new",
+    code: "654321",
+  }), { userClaims: claims() });
+  assert.equal(response.status, 200);
+});
+
+test("failed token restoration logs only safe metadata and returns 503", async () => {
+  const harness = createHarness();
+  await harness.handler(request({
+    action: "request-bind",
+    email: "person@example.com",
+    captchaToken: "captcha-bind",
+  }), { userClaims: claims() });
+  harness.store.upsertRecoveryEmail = async () => {
+    const error = new Error("upsert leaked person@example.com");
+    error.code = "storage_unavailable";
+    throw error;
+  };
+  harness.store.restoreConsumedToken = async () => {
+    harness.events.push(["restore-failed"]);
+    throw new Error("restore leaked token-1 and 123456");
+  };
+  const response = await harness.handler(request({
+    action: "verify-bind",
+    code: "123456",
+  }), { userClaims: claims() });
+  const body = await bodyOf(response);
+  assert.equal(response.status, 503);
+  assert.equal(body.error.code, "storage_unavailable");
+  assert.equal(
+    harness.logs.some(({ event }) =>
+      event === "account_email_compensation_failed"
+    ),
+    true,
+  );
+  assert.doesNotMatch(
+    JSON.stringify({ body, logs: harness.logs }),
+    /person@example\.com|123456|token-1|10000000-0000/,
+  );
+});
+
+test("account store restores only the exact consumed token row", async () => {
+  const calls = [];
+  const chain = {
+    update(values) {
+      calls.push(["update", values]);
+      return this;
+    },
+    eq(column, value) {
+      calls.push(["eq", column, value]);
+      return this;
+    },
+    not(column, operator, value) {
+      calls.push(["not", column, operator, value]);
+      return this;
+    },
+    select(columns) {
+      calls.push(["select", columns]);
+      return this;
+    },
+    async maybeSingle() {
+      calls.push(["maybeSingle"]);
+      return { data: { id: "token-atomic" }, error: null };
+    },
+  };
+  const store = createAccountStore({
+    from(table) {
+      calls.push(["from", table]);
+      return chain;
+    },
+    rpc() {
+      throw new Error("restore must not call token consumption RPC");
+    },
+  });
+  await store.restoreConsumedToken({
+    tokenId: "token-atomic",
+    consumedAttemptCount: 5,
+  });
+  assert.deepEqual(calls, [
+    ["from", "account_action_tokens"],
+    ["update", { used_at: null, attempt_count: 4 }],
+    ["eq", "id", "token-atomic"],
+    ["not", "used_at", "is", null],
+    ["eq", "attempt_count", 5],
+    ["select", "id"],
+    ["maybeSingle"],
+  ]);
+});
+
+test("production client factory keeps secret keys out of Authorization", async () => {
+  const calls = [];
+  const publishableKey = "sb_publishable_public";
+  const secretKey = "sb_secret_default";
+  const adminClient = {
+    auth: {
+      admin: {
+        updateUserById() {
+          throw new Error("account-email must not update auth email");
+        },
+      },
+    },
+  };
+  const createClientImpl = (url, apiKey, options) => {
+    calls.push({ url, apiKey, options: structuredClone(options) });
+    const explicitAuthorization = options.global?.headers?.Authorization;
+    if (apiKey === secretKey && explicitAuthorization) {
+      throw new Error("secret key entered Authorization");
+    }
+    if (apiKey === publishableKey) {
+      return {
+        auth: {
+          async getClaims(jwt) {
+            assert.equal(jwt, "user.jwt.value");
+            return {
+              data: { claims: { sub: USER_ID, iat: 1785657600 } },
+              error: null,
+            };
+          },
+        },
+      };
+    }
+    return adminClient;
+  };
+  const clients = await createSupabaseRequestClients({
+    createClientImpl,
+    envGet: (name) => ({
+      SUPABASE_URL: "https://project.supabase.co",
+      SUPABASE_PUBLISHABLE_KEY: publishableKey,
+      SUPABASE_SECRET_KEYS: JSON.stringify({ default: secretKey }),
+    })[name],
+    request: new Request("https://edge.example/account-email", {
+      headers: { authorization: "Bearer user.jwt.value" },
+    }),
+  });
+  assert.equal(clients.adminClient, adminClient);
+  assert.equal(clients.userClaims.sub, USER_ID);
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls[0].options.global.headers, {
+    Authorization: "Bearer user.jwt.value",
+    apikey: publishableKey,
+  });
+  assert.equal(calls[1].apiKey, secretKey);
+  assert.equal(calls[1].options.global?.headers?.Authorization, undefined);
+  assert.equal(JSON.stringify(calls[1].options).includes(secretKey), false);
 });

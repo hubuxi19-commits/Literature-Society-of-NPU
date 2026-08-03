@@ -14,8 +14,6 @@ const ACTIVE_TOKEN_PURPOSES = [
 ];
 const SEND_COOLDOWN_MS = 60_000;
 const RECENT_LOGIN_SECONDS = 5 * 60;
-const RATE_LIMIT_WINDOW_SECONDS = 15 * 60;
-const RATE_LIMIT_MAX = Object.freeze({ user: 5, email: 3, ip: 20 });
 const PUBLIC_MESSAGES = Object.freeze({
   unauthorized: "请先登录",
   invalid_email: "找回邮箱格式不正确",
@@ -49,23 +47,17 @@ function publicError(code, status) {
 }
 
 function corsHeaders(origin, allowedOrigins) {
-  if (!origin) return {};
+  if (!origin) throw publicError("origin_not_allowed", 403);
   if (!allowedOrigins.includes(origin)) throw publicError("origin_not_allowed", 403);
   return {
     "access-control-allow-origin": origin,
     "access-control-allow-methods": "POST, OPTIONS",
-    "access-control-allow-headers": "authorization, apikey, content-type, x-request-id",
+    "access-control-allow-headers": "authorization, x-client-info, apikey, content-type",
     "access-control-max-age": "86400",
     vary: "Origin",
   };
 }
 
-function safeRequestId(request, createRequestId) {
-  const supplied = request.headers.get("x-request-id")?.trim();
-  return supplied && /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(supplied)
-    ? supplied
-    : createRequestId();
-}
 
 function jsonResponse(body, status, requestId, headers) {
   return new Response(JSON.stringify(body), {
@@ -115,10 +107,12 @@ function normalizeEmail(value) {
   }
 }
 
-function clientIp(request) {
-  return request.headers.get("cf-connecting-ip")?.trim() ||
-    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-    "unknown";
+function requireTrustedNetworkIdentity(context) {
+  const identity = context?.trustedNetworkIdentity;
+  if (typeof identity !== "string" || identity.trim() === "") {
+    throw publicError("storage_unavailable", 503);
+  }
+  return identity.trim();
 }
 
 function nextSendAt(createdAt) {
@@ -145,21 +139,39 @@ export function createAccountEmailHandler({
     return digestSecret(`${purpose}:${userId}:${code}`, tokenPepper);
   }
 
-  async function consumeLimits(action, userId, emailNormalized, ip) {
-    const inputs = [
-      ["user", userId],
-      ["email", emailNormalized],
-      ["ip", ip],
+  async function consumeSendLimits(
+    purpose,
+    userId,
+    recipientEmail,
+    trustedNetworkIdentity,
+  ) {
+    const buckets = [
+      ["account", "account_cooldown", userId, 60, 1],
+      ["email", "email_cooldown", recipientEmail, 60, 1],
+      ["account", "account_daily", userId, 86400, 3],
+      ["email", "email_daily", recipientEmail, 86400, 3],
+      ["network", "network_daily", trustedNetworkIdentity, 86400, 20],
     ];
     const results = [];
-    for (const [scope, value] of inputs) {
-      const keyDigest = await digestSecret(`${scope}:${value}`, rateLimitPepper);
+    for (
+      const [
+        scope,
+        bucket,
+        value,
+        windowSeconds,
+        maxRequests,
+      ] of buckets
+    ) {
+      const keyDigest = await digestSecret(
+        scope + ":" + value,
+        rateLimitPepper,
+      );
       results.push(await store.consumeRateLimit({
-        action: action.replaceAll("-", "_"),
+        action: purpose + ":" + bucket,
         scope,
         keyDigest,
-        windowSeconds: RATE_LIMIT_WINDOW_SECONDS,
-        maxRequests: RATE_LIMIT_MAX[scope],
+        windowSeconds,
+        maxRequests,
       }));
     }
     if (results.some((allowed) => !allowed)) throw publicError("rate_limited", 429);
@@ -173,7 +185,7 @@ export function createAccountEmailHandler({
     code,
     requestId,
     currentTime,
-  }) {
+  }, onTokenInserted = () => {}) {
     const tokenDigest = await digestCode(purpose, userId, code);
     const expiresAt = new Date(
       currentTime.getTime() + SECURITY_CODE_EXPIRES_MINUTES * 60_000,
@@ -187,6 +199,7 @@ export function createAccountEmailHandler({
       expiresAt,
       maxAttempts: SECURITY_CODE_MAX_ATTEMPTS,
     });
+    onTokenInserted(token);
     try {
       await sendSecurityEmail({
         to: purpose === "change_email_new" ? nextEmailNormalized : emailNormalized,
@@ -200,6 +213,58 @@ export function createAccountEmailHandler({
       throw publicError("delivery_failed", 502);
     }
     return token;
+  }
+
+  function logCompensationFailure(requestId) {
+    logger({
+      event: "account_email_compensation_failed",
+      requestId,
+      code: "storage_unavailable",
+      status: 503,
+    });
+  }
+
+  async function restoreConsumedToken(token, requestId) {
+    try {
+      await store.restoreConsumedToken({
+        tokenId: token.id,
+        consumedAttemptCount: token.attemptCount,
+      });
+    } catch {
+      logCompensationFailure(requestId);
+      throw publicError("storage_unavailable", 503);
+    }
+  }
+
+  async function compensateOldConfirmation(
+    oldToken,
+    newToken,
+    currentTime,
+    requestId,
+  ) {
+    let failed = false;
+    if (newToken) {
+      try {
+        await store.markTokenUsed({
+          tokenId: newToken.id,
+          usedAt: currentTime.toISOString(),
+        });
+      } catch {
+        failed = true;
+      }
+    }
+    try {
+      await store.restoreConsumedToken({
+        tokenId: oldToken.id,
+        consumedAttemptCount: oldToken.attemptCount,
+      });
+    } catch {
+      failed = true;
+    }
+    if (failed) {
+      logCompensationFailure(requestId);
+      throw publicError("storage_unavailable", 503);
+    }
   }
 
   async function verifyCaptcha(token, requestId) {
@@ -237,11 +302,16 @@ export function createAccountEmailHandler({
     return stateResponse("unbound", null, null);
   }
 
-  async function requestBind(body, request, context, requestId, currentTime) {
+  async function requestBind(body, context, requestId, currentTime) {
     const userId = requireUser(context);
     const emailNormalized = normalizeEmail(body.email);
     await verifyCaptcha(body.captchaToken, requestId);
-    await consumeLimits("request-bind", userId, emailNormalized, clientIp(request));
+    await consumeSendLimits(
+      "bind_email",
+      userId,
+      emailNormalized,
+      requireTrustedNetworkIdentity(context),
+    );
     if (await store.isEmailOwnedByAnother({ emailNormalized, userId })) {
       throw publicError("email_unavailable", 409);
     }
@@ -270,7 +340,7 @@ export function createAccountEmailHandler({
     );
   }
 
-  async function verifyBind(body, context, currentTime) {
+  async function verifyBind(body, context, requestId, currentTime) {
     const userId = requireUser(context);
     const code = requireCode(body.code);
     const token = await store.consumeToken({
@@ -287,13 +357,14 @@ export function createAccountEmailHandler({
         verifiedAt: currentTime.toISOString(),
       });
     } catch (error) {
+      await restoreConsumedToken(token, requestId);
       if (isConflict(error)) throw publicError("email_unavailable", 409);
       throw error;
     }
     return stateResponse("verified", maskRecoveryEmail(token.emailNormalized), null);
   }
 
-  async function requestChange(body, request, context, requestId, currentTime) {
+  async function requestChange(body, context, requestId, currentTime) {
     const userId = requireUser(context);
     requireRecentLogin(context, currentTime);
     const recovery = await store.getRecoveryEmail(userId);
@@ -301,7 +372,12 @@ export function createAccountEmailHandler({
     const newEmail = normalizeEmail(body.newEmail);
     if (newEmail === recovery.emailNormalized) throw publicError("email_unavailable", 409);
     await verifyCaptcha(body.captchaToken, requestId);
-    await consumeLimits("request-change", userId, newEmail, clientIp(request));
+    await consumeSendLimits(
+      "change_email_old",
+      userId,
+      recovery.emailNormalized,
+      requireTrustedNetworkIdentity(context),
+    );
     if (await store.isEmailOwnedByAnother({ emailNormalized: newEmail, userId })) {
       throw publicError("email_unavailable", 409);
     }
@@ -338,32 +414,51 @@ export function createAccountEmailHandler({
     if (!token?.emailNormalized || !token?.nextEmailNormalized) {
       throw publicError("invalid_code", 400);
     }
-    if (await store.isEmailOwnedByAnother({
-      emailNormalized: token.nextEmailNormalized,
-      userId,
-    })) throw publicError("email_unavailable", 409);
-    await store.invalidateUnusedTokens({
-      userId,
-      purposes: ["change_email_new"],
-      usedAt: currentTime.toISOString(),
-    });
-    const nextToken = await sendInsertedToken({
-      userId,
-      purpose: "change_email_new",
-      emailNormalized: token.emailNormalized,
-      nextEmailNormalized: token.nextEmailNormalized,
-      code: createCode(),
-      requestId,
-      currentTime,
-    });
-    return stateResponse(
-      "changing",
-      maskRecoveryEmail(token.emailNormalized),
-      nextSendAt(nextToken.createdAt ?? currentTime.toISOString()),
-    );
+    let nextToken = null;
+    try {
+      if (await store.isEmailOwnedByAnother({
+        emailNormalized: token.nextEmailNormalized,
+        userId,
+      })) throw publicError("email_unavailable", 409);
+      await consumeSendLimits(
+        "change_email_new",
+        userId,
+        token.nextEmailNormalized,
+        requireTrustedNetworkIdentity(context),
+      );
+      await store.invalidateUnusedTokens({
+        userId,
+        purposes: ["change_email_new"],
+        usedAt: currentTime.toISOString(),
+      });
+      nextToken = await sendInsertedToken({
+        userId,
+        purpose: "change_email_new",
+        emailNormalized: token.emailNormalized,
+        nextEmailNormalized: token.nextEmailNormalized,
+        code: createCode(),
+        requestId,
+        currentTime,
+      }, (insertedToken) => {
+        nextToken = insertedToken;
+      });
+      return stateResponse(
+        "changing",
+        maskRecoveryEmail(token.emailNormalized),
+        nextSendAt(nextToken.createdAt ?? currentTime.toISOString()),
+      );
+    } catch (error) {
+      await compensateOldConfirmation(
+        token,
+        nextToken,
+        currentTime,
+        requestId,
+      );
+      throw error;
+    }
   }
 
-  async function confirmChangeNew(body, context, currentTime) {
+  async function confirmChangeNew(body, context, requestId, currentTime) {
     const userId = requireUser(context);
     const code = requireCode(body.code);
     const token = await store.consumeToken({
@@ -373,17 +468,18 @@ export function createAccountEmailHandler({
       maxAttempts: SECURITY_CODE_MAX_ATTEMPTS,
     });
     if (!token?.nextEmailNormalized) throw publicError("invalid_code", 400);
-    if (await store.isEmailOwnedByAnother({
-      emailNormalized: token.nextEmailNormalized,
-      userId,
-    })) throw publicError("email_unavailable", 409);
     try {
+      if (await store.isEmailOwnedByAnother({
+        emailNormalized: token.nextEmailNormalized,
+        userId,
+      })) throw publicError("email_unavailable", 409);
       await store.updateRecoveryEmail({
         userId,
         emailNormalized: token.nextEmailNormalized,
         verifiedAt: currentTime.toISOString(),
       });
     } catch (error) {
+      await restoreConsumedToken(token, requestId);
       if (isConflict(error)) throw publicError("email_unavailable", 409);
       throw error;
     }
@@ -395,7 +491,7 @@ export function createAccountEmailHandler({
   }
 
   return async function handleAccountEmail(request, context = {}) {
-    const requestId = safeRequestId(request, createRequestId);
+    const requestId = createRequestId();
     let headers = {};
     try {
       headers = corsHeaders(request.headers.get("origin"), allowedOrigins);
@@ -422,19 +518,19 @@ export function createAccountEmailHandler({
           break;
         }
         case "request-bind":
-          result = await requestBind(body, request, context, requestId, currentTime);
+          result = await requestBind(body, context, requestId, currentTime);
           break;
         case "verify-bind":
-          result = await verifyBind(body, context, currentTime);
+          result = await verifyBind(body, context, requestId, currentTime);
           break;
         case "request-change":
-          result = await requestChange(body, request, context, requestId, currentTime);
+          result = await requestChange(body, context, requestId, currentTime);
           break;
         case "confirm-change-old":
           result = await confirmChangeOld(body, context, requestId, currentTime);
           break;
         case "confirm-change-new":
-          result = await confirmChangeNew(body, context, currentTime);
+          result = await confirmChangeNew(body, context, requestId, currentTime);
           break;
         default:
           requireUser(context);
