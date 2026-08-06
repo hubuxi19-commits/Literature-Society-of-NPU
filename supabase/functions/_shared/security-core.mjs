@@ -15,6 +15,26 @@ const UNBIASED_RANDOM_LIMIT = Math.floor(MAX_RANDOM_VALUE / CODE_SPACE) * CODE_S
 export const SECURITY_CODE_EXPIRES_MINUTES = 10;
 export const SECURITY_CODE_MAX_ATTEMPTS = 5;
 
+const STUDENT_NUMBER_PATTERN = /^20\d{8}$/;
+const AUTH_EMAIL_DOMAIN = "accounts.wenyuan.invalid";
+
+export function validateStudentNumber(value) {
+  return STUDENT_NUMBER_PATTERN.test(String(value ?? "").trim());
+}
+
+export function validatePassword(value) {
+  const password = String(value ?? "");
+  return password.length >= 8 && /[A-Za-z]/.test(password) && /\d/.test(password);
+}
+
+export function studentNumberToInternalEmail(value) {
+  const studentNumber = String(value ?? "").trim();
+  if (!validateStudentNumber(studentNumber)) {
+    throw new Error("学号格式不正确");
+  }
+  return `${studentNumber}@${AUTH_EMAIL_DOMAIN}`;
+}
+
 export function normalizeRecoveryEmail(value) {
   const normalized = String(value ?? "").trim().toLowerCase();
   const atIndex = normalized.indexOf("@");

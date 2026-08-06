@@ -14,6 +14,12 @@ import {
 import {
   createAccountEmailProductionHandler,
 } from "../supabase/functions/account-email/runtime.mjs";
+import {
+  createPasswordRecoveryHandler,
+} from "../supabase/functions/password-recovery/logic.mjs";
+import {
+  createPasswordRecoveryProductionHandler,
+} from "../supabase/functions/password-recovery/runtime.mjs";
 import { createAccountStore } from "../supabase/functions/_shared/account-store.ts";
 
 import { createTrustedDenoServeHandler } from "../supabase/functions/_shared/edge-runtime.mjs";
@@ -1685,5 +1691,545 @@ test("production runtime confirms recovery change without mutating Auth email", 
       event === "eq" && column === "user_id" && value === USER_ID
     ),
     true,
+  );
+});
+
+function pwRequest(body, { origin = ORIGIN, headers = {} } = {}) {
+  return new Request("https://edge.example/functions/v1/password-recovery", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      origin,
+      "cf-connecting-ip": "203.0.113.42",
+      ...headers,
+    },
+    body: JSON.stringify(body),
+  });
+}
+
+function createPasswordRecoveryHarness({
+  captchaFailure = false,
+  sendFailure = false,
+  knownUsers = [],
+  recoveryEmailFor = new Map(),
+  rateLimitResults = [true, true, true, true, true],
+  serverRequestId = "req_pw_123",
+} = {}) {
+  const events = [];
+  const sent = [];
+  const logs = [];
+  const tokens = [];
+  const passwordUpdates = [];
+  let nextTokenId = 1;
+  const store = {
+    async consumeRateLimit(input) {
+      events.push(["rate-limit", { ...input }]);
+      return rateLimitResults.shift() ?? true;
+    },
+    async getRecoveryEmail(userId) {
+      events.push(["get-recovery", userId]);
+      return recoveryEmailFor.get(userId) ?? null;
+    },
+    async insertToken(input) {
+      const token = {
+        id: `pw-token-${nextTokenId++}`,
+        attemptCount: 0,
+        usedAt: null,
+        createdAt: NOW.toISOString(),
+        ...input,
+      };
+      events.push(["insert-token", { ...token }]);
+      tokens.push(token);
+      return token;
+    },
+    async markTokenUsed({ tokenId, usedAt }) {
+      events.push(["mark-used", tokenId, usedAt]);
+      const token = tokens.find(({ id }) => id === tokenId);
+      if (!token || token.usedAt !== null) return false;
+      token.usedAt = usedAt;
+      return true;
+    },
+    async consumeToken({ tokenDigest, purpose, userId, maxAttempts }) {
+      events.push(["consume-token", { tokenDigest, purpose, userId, maxAttempts }]);
+      const token = [...tokens]
+        .reverse()
+        .find((candidate) =>
+          candidate.userId === userId &&
+          candidate.purpose === purpose &&
+          candidate.usedAt === null
+        );
+      if (
+        !token ||
+        token.expiresAt <= NOW.toISOString() ||
+        token.attemptCount >= Math.min(token.maxAttempts, maxAttempts)
+      ) return null;
+      token.attemptCount += 1;
+      if (token.tokenDigest !== tokenDigest) return null;
+      token.usedAt = NOW.toISOString();
+      return { ...token };
+    },
+    async restoreConsumedToken({
+      tokenId,
+      consumedAttemptCount,
+      consumedUsedAt,
+    }) {
+      events.push([
+        "restore-token",
+        tokenId,
+        consumedAttemptCount,
+        consumedUsedAt,
+      ]);
+      const token = tokens.find(({ id }) => id === tokenId);
+      if (
+        !token ||
+        token.usedAt !== consumedUsedAt ||
+        token.attemptCount !== consumedAttemptCount
+      ) return false;
+      token.usedAt = null;
+      token.attemptCount = consumedAttemptCount - 1;
+      return true;
+    },
+  };
+  const usersByNumber = new Map(
+    knownUsers.map(({ studentNumber, userId }) => [studentNumber, { userId }]),
+  );
+  const deps = {
+    async updateUserPassword(userId, newPassword) {
+      events.push(["update-password", userId, newPassword]);
+      passwordUpdates.push({ userId, newPassword });
+    },
+  };
+  const codes = ["123456", "654321", "111111"];
+  const handler = createPasswordRecoveryHandler({
+    store,
+    allowedOrigins: [ORIGIN],
+    now: () => new Date(NOW),
+    createCode: () => codes.shift(),
+    createRequestId: () => serverRequestId,
+    tokenPepper: "test-token-pepper",
+    rateLimitPepper: "test-rate-pepper",
+    verifyTurnstile: async (token, requestId) => {
+      events.push(["turnstile", token, requestId]);
+      if (captchaFailure) throw new Error("captcha failed");
+      if (!token) throw new Error("captcha rejected");
+    },
+    sendSecurityEmail: async (message) => {
+      events.push(["send-email", { ...message }]);
+      if (sendFailure) throw new Error("provider failed");
+      sent.push({ ...message });
+      return { messageId: `message-${sent.length}` };
+    },
+    logger: (entry) => logs.push(entry),
+    findUserByInternalEmail: async (internalEmail) => {
+      events.push(["lookup-user", internalEmail]);
+      const studentNumber = internalEmail.split("@")[0];
+      return usersByNumber.get(studentNumber) ?? null;
+    },
+    updateUserPassword: (userId, newPassword) =>
+      deps.updateUserPassword(userId, newPassword),
+  });
+  const trustedHandler = (incomingRequest, context = {}) =>
+    handler(incomingRequest, { trustedNetworkIdentity: "198.51.100.24", ...context });
+  return {
+    events,
+    handler: trustedHandler,
+    logs,
+    sent,
+    store,
+    tokens,
+    passwordUpdates,
+    deps,
+  };
+}
+
+test("password recovery request returns the identical fixed message for every account state", async () => {
+  const harness = createPasswordRecoveryHarness({
+    knownUsers: [
+      { studentNumber: "2023123456", userId: USER_ID },
+      { studentNumber: "2023000001", userId: OTHER_USER_ID },
+    ],
+    recoveryEmailFor: new Map([
+      [USER_ID, { emailNormalized: "person@example.com", verifiedAt: NOW.toISOString() }],
+    ]),
+  });
+  const { handler, sent } = harness;
+  const expected = { ok: true, message: "如果账号存在且已绑定邮箱，我们已发送验证码。" };
+
+  const known = await handler(pwRequest({
+    action: "request",
+    studentNumber: "2023123456",
+    captchaToken: "t",
+  }));
+  assert.equal(known.status, 200);
+  assert.deepEqual(await bodyOf(known), expected);
+
+  const recoveryMissing = await handler(pwRequest({
+    action: "request",
+    studentNumber: "2023000001",
+    captchaToken: "t",
+  }));
+  assert.equal(recoveryMissing.status, 200);
+  assert.deepEqual(await bodyOf(recoveryMissing), expected);
+
+  const unknown = await handler(pwRequest({
+    action: "request",
+    studentNumber: "2099999999",
+    captchaToken: "t",
+  }));
+  assert.equal(unknown.status, 200);
+  assert.deepEqual(await bodyOf(unknown), expected);
+
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].purpose, "reset_password");
+  assert.equal(sent[0].to, "person@example.com");
+  assert.equal(sent[0].requestId, "req_pw_123");
+  assert.equal(
+    harness.events.filter(([name]) => name === "lookup-user").length,
+    3,
+  );
+});
+
+test("password recovery validates captcha before any account lookup", async () => {
+  const harness = createPasswordRecoveryHarness({ captchaFailure: true });
+  const response = await harness.handler(pwRequest({
+    action: "request",
+    studentNumber: "2023123456",
+    captchaToken: "bad",
+  }));
+  assert.equal(response.status, 400);
+  assert.equal((await bodyOf(response)).error.code, "captcha_failed");
+  assert.equal(
+    harness.events.some(([name]) => name === "lookup-user"),
+    false,
+  );
+});
+
+test("password recovery complete updates the matched user password only", async () => {
+  const harness = createPasswordRecoveryHarness({
+    knownUsers: [{ studentNumber: "2023123456", userId: USER_ID }],
+    recoveryEmailFor: new Map([
+      [USER_ID, { emailNormalized: "person@example.com", verifiedAt: NOW.toISOString() }],
+    ]),
+  });
+  await harness.handler(pwRequest({
+    action: "request",
+    studentNumber: "2023123456",
+    captchaToken: "t",
+  }));
+  const response = await harness.handler(pwRequest({
+    action: "complete",
+    studentNumber: "2023123456",
+    code: "123456",
+    newPassword: "newpass88",
+    captchaToken: "t",
+  }));
+  assert.equal(response.status, 200);
+  assert.deepEqual(await bodyOf(response), {
+    ok: true,
+    message: "密码已更新，请使用新密码登录。",
+  });
+  assert.equal(harness.passwordUpdates.length, 1);
+  assert.deepEqual(harness.passwordUpdates[0], {
+    userId: USER_ID,
+    newPassword: "newpass88",
+  });
+});
+
+test("password recovery complete rejects the correct code after five wrong attempts", async () => {
+  const harness = createPasswordRecoveryHarness({
+    knownUsers: [{ studentNumber: "2023123456", userId: USER_ID }],
+    recoveryEmailFor: new Map([
+      [USER_ID, { emailNormalized: "person@example.com", verifiedAt: NOW.toISOString() }],
+    ]),
+  });
+  await harness.handler(pwRequest({
+    action: "request",
+    studentNumber: "2023123456",
+    captchaToken: "t",
+  }));
+  for (const code of ["000000", "111111", "222222", "333333", "444444"]) {
+    const response = await harness.handler(pwRequest({
+      action: "complete",
+      studentNumber: "2023123456",
+      code,
+      newPassword: "newpass88",
+      captchaToken: "t",
+    }));
+    assert.equal(response.status, 400);
+  }
+  const sixth = await harness.handler(pwRequest({
+    action: "complete",
+    studentNumber: "2023123456",
+    code: "123456",
+    newPassword: "newpass88",
+    captchaToken: "t",
+  }));
+  assert.equal(sixth.status, 400);
+  assert.equal((await bodyOf(sixth)).error.code, "invalid_code");
+  assert.equal(harness.passwordUpdates.length, 0);
+  assert.equal(harness.tokens[0].attemptCount, 5);
+});
+
+test("password recovery complete validates student number, password, and code shape", async () => {
+  const harness = createPasswordRecoveryHarness();
+
+  let response = await harness.handler(pwRequest({
+    action: "complete",
+    studentNumber: "bad-number",
+    code: "123456",
+    newPassword: "newpass88",
+    captchaToken: "t",
+  }));
+  assert.equal(response.status, 400);
+  assert.equal((await bodyOf(response)).error.code, "invalid_student_number");
+
+  response = await harness.handler(pwRequest({
+    action: "complete",
+    studentNumber: "2023123456",
+    code: "123456",
+    newPassword: "short",
+    captchaToken: "t",
+  }));
+  assert.equal(response.status, 400);
+  assert.equal((await bodyOf(response)).error.code, "invalid_password");
+
+  response = await harness.handler(pwRequest({
+    action: "complete",
+    studentNumber: "2023123456",
+    code: "12",
+    newPassword: "newpass88",
+    captchaToken: "t",
+  }));
+  assert.equal(response.status, 400);
+  assert.equal((await bodyOf(response)).error.code, "invalid_code");
+});
+
+test("password recovery complete restores the code when the password update fails", async () => {
+  const harness = createPasswordRecoveryHarness({
+    knownUsers: [{ studentNumber: "2023123456", userId: USER_ID }],
+    recoveryEmailFor: new Map([
+      [USER_ID, { emailNormalized: "person@example.com", verifiedAt: NOW.toISOString() }],
+    ]),
+  });
+  harness.deps.updateUserPassword = async () => {
+    throw new Error("update failed");
+  };
+  await harness.handler(pwRequest({
+    action: "request",
+    studentNumber: "2023123456",
+    captchaToken: "t",
+  }));
+  const response = await harness.handler(pwRequest({
+    action: "complete",
+    studentNumber: "2023123456",
+    code: "123456",
+    newPassword: "newpass88",
+    captchaToken: "t",
+  }));
+  assert.equal(response.status, 502);
+  assert.equal((await bodyOf(response)).error.code, "password_update_failed");
+  assert.equal(harness.tokens[0].usedAt, null);
+  assert.equal(
+    harness.logs.some(({ event }) =>
+      event === "password_recovery_compensation_failed"
+    ),
+    false,
+  );
+});
+
+test("password recovery delivery failure returns the fixed message and consumes the token", async () => {
+  const harness = createPasswordRecoveryHarness({
+    sendFailure: true,
+    knownUsers: [{ studentNumber: "2023123456", userId: USER_ID }],
+    recoveryEmailFor: new Map([
+      [USER_ID, { emailNormalized: "person@example.com", verifiedAt: NOW.toISOString() }],
+    ]),
+  });
+  const response = await harness.handler(pwRequest({
+    action: "request",
+    studentNumber: "2023123456",
+    captchaToken: "t",
+  }));
+  assert.equal(response.status, 200);
+  assert.deepEqual(await bodyOf(response), {
+    ok: true,
+    message: "如果账号存在且已绑定邮箱，我们已发送验证码。",
+  });
+  assert.equal(harness.tokens[0].usedAt, NOW.toISOString());
+  assert.equal(
+    harness.logs.some(({ event }) => event === "password_recovery_delivery_failed"),
+    true,
+  );
+});
+
+test("password recovery production runtime uses listUsers and updates password only", async () => {
+  const adminEvents = [];
+  let table = "";
+  const tokenRow = {
+    id: "pw-token-runtime",
+    user_id: USER_ID,
+    purpose: "reset_password",
+    token_digest: "\\x00",
+    email_normalized: "person@example.com",
+    next_email_normalized: null,
+    expires_at: "2026-08-02T08:10:00.000Z",
+    attempt_count: 0,
+    max_attempts: 5,
+    used_at: null,
+    created_at: "2026-08-02T08:00:00.000Z",
+  };
+  const recoveryRow = {
+    user_id: USER_ID,
+    email_normalized: "person@example.com",
+    verified_at: NOW.toISOString(),
+  };
+  const chain = {
+    select(columns) {
+      adminEvents.push(["select", table, columns]);
+      return this;
+    },
+    eq(column, value) {
+      adminEvents.push(["eq", column, value]);
+      return this;
+    },
+    is(column, value) {
+      adminEvents.push(["is", column, value]);
+      return this;
+    },
+    in(column, values) {
+      adminEvents.push(["in", column, values]);
+      return this;
+    },
+    gt(column, value) {
+      adminEvents.push(["gt", column, value]);
+      return this;
+    },
+    order(column, options) {
+      adminEvents.push(["order", column, options]);
+      return this;
+    },
+    limit(value) {
+      adminEvents.push(["limit", value]);
+      return this;
+    },
+    insert(values) {
+      adminEvents.push(["insert", values]);
+      return this;
+    },
+    update(values) {
+      adminEvents.push(["update", values]);
+      return this;
+    },
+    async maybeSingle() {
+      adminEvents.push(["maybeSingle"]);
+      if (table === "account_recovery_emails") return { data: recoveryRow, error: null };
+      return { data: null, error: null };
+    },
+    async single() {
+      adminEvents.push(["single"]);
+      if (table === "account_action_tokens") return { data: tokenRow, error: null };
+      return { data: null, error: null };
+    },
+  };
+  const adminClient = {
+    auth: {
+      admin: {
+        async listUsers({ page, perPage }) {
+          adminEvents.push(["list-users", page, perPage]);
+          return {
+            data: {
+              users: [{ id: USER_ID, email: "2023123456@accounts.wenyuan.invalid" }],
+            },
+            error: null,
+          };
+        },
+        async updateUserById(userId, values) {
+          adminEvents.push(["update-user", userId, { ...values }]);
+          assert.equal(userId, USER_ID);
+          assert.equal(Object.hasOwn(values, "password"), true);
+          assert.equal(Object.hasOwn(values, "email"), false);
+          assert.equal(values.password, "newpass88");
+          return { data: {}, error: null };
+        },
+      },
+    },
+    from(target) {
+      table = target;
+      adminEvents.push(["from", target]);
+      return chain;
+    },
+    async rpc(name) {
+      adminEvents.push(["rpc", name]);
+      if (name === "consume_auth_rate_limit") return { data: true, error: null };
+      if (name === "consume_account_action_token") return { data: [tokenRow], error: null };
+      return { data: null, error: null };
+    },
+  };
+  const publishableKey = "sb_publishable_pw";
+  const secretKey = "sb_secret_pw";
+  let secretCalls = 0;
+  const createClientImpl = (_url, apiKey) => {
+    assert.equal(apiKey, secretKey);
+    secretCalls += 1;
+    return adminClient;
+  };
+  const sent = [];
+  const handler = createPasswordRecoveryProductionHandler({
+    createClientImpl,
+    envGet: (name) => ({
+      SUPABASE_URL: "https://project.supabase.co",
+      SUPABASE_SECRET_KEYS: JSON.stringify({ default: secretKey }),
+      ALLOWED_ORIGINS: ORIGIN,
+    })[name],
+    allowedOrigins: [ORIGIN],
+    tokenPepper: "runtime-token-pepper",
+    rateLimitPepper: "runtime-rate-pepper",
+    verifyTurnstile: async () => {},
+    sendSecurityEmail: async (message) => {
+      sent.push({ ...message });
+      return { messageId: "message-runtime" };
+    },
+    logger: () => {},
+    now: () => new Date(NOW),
+    createRequestId: () => "pw-request-id",
+  });
+
+  const requestResponse = await handler(pwRequest({
+    action: "request",
+    studentNumber: "2023123456",
+    captchaToken: "t",
+  }), { trustedNetworkIdentity: "198.51.100.24" });
+  assert.equal(requestResponse.status, 200);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].to, "person@example.com");
+  assert.equal(
+    adminEvents.some(([name, page, perPage]) =>
+      name === "list-users" && page === 1 && perPage === 200
+    ),
+    true,
+  );
+
+  const completeResponse = await handler(pwRequest({
+    action: "complete",
+    studentNumber: "2023123456",
+    code: "123456",
+    newPassword: "newpass88",
+    captchaToken: "t",
+  }), { trustedNetworkIdentity: "198.51.100.24" });
+  assert.equal(completeResponse.status, 200);
+  assert.deepEqual(await bodyOf(completeResponse), {
+    ok: true,
+    message: "密码已更新，请使用新密码登录。",
+  });
+  assert.equal(
+    adminEvents.some(([name, userId]) =>
+      name === "update-user" && userId === USER_ID
+    ),
+    true,
+  );
+  assert.equal(secretCalls, 1);
+  assert.equal(
+    JSON.stringify(adminEvents).includes(secretKey),
+    false,
   );
 });

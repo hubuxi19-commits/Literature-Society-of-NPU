@@ -9,6 +9,9 @@ import {
   digestSecret,
   maskRecoveryEmail,
   normalizeRecoveryEmail,
+  studentNumberToInternalEmail,
+  validatePassword,
+  validateStudentNumber,
 } from "../supabase/functions/_shared/security-core.mjs";
 import { verifyTurnstile } from "../supabase/functions/_shared/turnstile.ts";
 import { sendSecurityEmail } from "../supabase/functions/_shared/brevo.ts";
@@ -534,4 +537,31 @@ test("Brevo 失败不记录或返回收件人、验证码与 provider body", asy
     console.error = previousConsole.error;
   }
   assert.deepEqual(emittedLogs, []);
+});
+
+test("学号必须是 20 开头的十位数字", () => {
+  assert.equal(validateStudentNumber("2023123456"), true);
+  assert.equal(validateStudentNumber(" 2023123456 "), true);
+  assert.equal(validateStudentNumber("1923123456"), false);
+  assert.equal(validateStudentNumber("202312345"), false);
+  assert.equal(validateStudentNumber("202312345x"), false);
+  assert.equal(validateStudentNumber(""), false);
+});
+
+test("密码必须同时包含字母和数字且不少于八位", () => {
+  assert.equal(validatePassword("wenyuan88"), true);
+  assert.equal(validatePassword("20231234aa"), true);
+  assert.equal(validatePassword("12345678"), false);
+  assert.equal(validatePassword("password"), false);
+  assert.equal(validatePassword("wen8"), false);
+  assert.equal(validatePassword(""), false);
+});
+
+test("学号映射为内部 Auth 邮箱标识且不暴露给公开文案", () => {
+  assert.equal(
+    studentNumberToInternalEmail(" 2023123456 "),
+    "2023123456@accounts.wenyuan.invalid",
+  );
+  assert.throws(() => studentNumberToInternalEmail("not-a-student-number"), /学号格式/);
+  assert.throws(() => studentNumberToInternalEmail("1923123456"), /学号格式/);
 });
