@@ -34,6 +34,7 @@ const authDialog = document.querySelector("#authDialog");
 const confirmDialog = document.querySelector("#confirmDialog");
 const profileDialog = document.querySelector("#profileDialog");
 const profileDialogContent = document.querySelector("#profileDialogContent");
+const recoveryDialog = document.querySelector("#recoveryDialog");
 const confirmMessage = document.querySelector("#confirmMessage");
 const accountButton = document.querySelector("#accountButton");
 const accountMenu = document.querySelector("#accountMenu");
@@ -69,6 +70,9 @@ const state = {
   confirmResolver: null,
   toastTimer: null,
   authReturnHash: null,
+  accountSecurityReturnHash: null,
+  accountSecurityPendingEmail: null,
+  accountSecurityChangeStep: 0,
 };
 
 function element(tagName, options = {}, children = []) {
@@ -212,10 +216,95 @@ function switchAuthTab(tab) {
   document.querySelectorAll("[data-form-message]").forEach((message) => {
     message.textContent = "";
   });
+  if (tab === "register") {
+    renderTurnstile(document.querySelector("#registerForm"));
+  }
 }
 
 function closeAuth() {
   if (authDialog.open) authDialog.close();
+}
+
+function readTurnstileToken(form) {
+  if (!config.turnstileSiteKey) return "demo-turnstile-token";
+  const host = form.querySelector("[data-turnstile]");
+  return host?.dataset.token || "";
+}
+
+async function renderTurnstile(form) {
+  if (!config.turnstileSiteKey) return;
+  const host = form.querySelector("[data-turnstile]");
+  if (!host || host.dataset.rendered) return;
+  if (!window.turnstile) {
+    await new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src =
+        "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+      script.async = true;
+      script.onload = resolve;
+      script.onerror = reject;
+      document.head.append(script);
+    });
+  }
+  host.dataset.rendered = "true";
+  window.turnstile.render(host, {
+    sitekey: config.turnstileSiteKey,
+    callback: (token) => {
+      host.dataset.token = token;
+    },
+  });
+}
+
+function requireVerifiedWrite(returnHash = window.location.hash) {
+  if (!state.session) {
+    openAuth("login", returnHash);
+    return false;
+  }
+  if (state.session.accountSecurity?.state !== "verified") {
+    state.accountSecurityReturnHash = returnHash;
+    window.location.hash = "#/account/security";
+    showToast("请先验证找回邮箱，再继续操作。", "info");
+    return false;
+  }
+  return true;
+}
+
+function routeToAccountSecurityIfUnverified(error) {
+  if (String(error?.message ?? "").includes("验证找回邮箱")) {
+    state.accountSecurityReturnHash = window.location.hash;
+    window.location.hash = "#/account/security";
+    showToast("请先验证找回邮箱后再进行此操作。", "info");
+    return true;
+  }
+  return false;
+}
+
+async function refreshSessionSecurity() {
+  if (!state.session) return;
+  state.session.accountSecurity = await service.getAccountSecurityStatus();
+}
+
+function openPasswordRecovery() {
+  const requestForm = document.querySelector("#recoveryRequestForm");
+  const completeForm = document.querySelector("#recoveryCompleteForm");
+  requestForm.hidden = false;
+  completeForm.hidden = true;
+  requestForm.reset();
+  completeForm.reset();
+  document
+    .querySelectorAll(
+      '[data-form-message="recovery-request"], [data-form-message="recovery-complete"]',
+    )
+    .forEach((message) => {
+      message.textContent = "";
+    });
+  if (!recoveryDialog.open) recoveryDialog.showModal();
+  renderTurnstile(requestForm);
+  requestForm.querySelector('[name="studentNumber"]').focus();
+}
+
+function closePasswordRecovery() {
+  if (recoveryDialog.open) recoveryDialog.close();
 }
 
 function closeProfileEditor() {
@@ -1520,6 +1609,7 @@ function renderWrite() {
     renderAuthGate();
     return;
   }
+  if (!requireVerifiedWrite("#/write")) return;
   const draft = readDraft();
   const shell = element("div", { className: "page-shell writing-shell" });
   const aside = element("aside", { className: "writing-aside" }, [
@@ -1611,6 +1701,315 @@ function renderWrite() {
   shell.append(aside, form);
   replaceContent(app, shell);
 }
+
+function renderResendControl(nextSendAt) {
+  const wrap = element("p", { className: "resend-row" });
+  const button = element("button", {
+    className: "text-button resend-button",
+    type: "button",
+    text: "重新发送验证码",
+    dataset: { action: "request-recovery-code" },
+  });
+  const countdown = element("span", { className: "resend-countdown" });
+  wrap.append(button, countdown);
+  const update = () => {
+    const remaining = new Date(nextSendAt || 0).getTime() - Date.now();
+    if (remaining > 0) {
+      const seconds = Math.max(1, Math.ceil(remaining / 1000));
+      countdown.textContent = `${seconds} 秒后可重新发送`;
+      button.disabled = true;
+      window.setTimeout(update, 500);
+    } else {
+      countdown.textContent = "";
+      button.disabled = false;
+    }
+  };
+  update();
+  return wrap;
+}
+
+function renderUnboundSecurity() {
+  const form = element("form", {
+    className: "stack-form account-security-form",
+    id: "bindRecoveryForm",
+  });
+  form.append(
+    element("label", {}, [
+      element("span", { text: "找回邮箱" }),
+      element("input", {
+        name: "recoveryEmail",
+        type: "email",
+        attrs: { required: true, autocomplete: "email" },
+      }),
+    ]),
+    element("div", { attrs: { "data-turnstile": "" } }),
+    element("p", {
+      className: "form-message",
+      role: "status",
+      dataset: { formMessage: "bind" },
+    }),
+    element("button", {
+      className: "primary-button",
+      type: "submit",
+      text: "发送验证码",
+      dataset: { action: "request-recovery-code" },
+    }),
+  );
+  renderTurnstile(form);
+  return element("section", { className: "account-security-panel" }, [
+    element("p", {
+      className: "account-security-meta",
+      text: "绑定找回邮箱后，忘记密码时可以通过验证码重置。邮箱只用于验证，不会公开。",
+    }),
+    form,
+  ]);
+}
+
+function renderPendingSecurity(status) {
+  const form = element("form", {
+    className: "stack-form account-security-form",
+    id: "verifyRecoveryForm",
+  });
+  form.append(
+    element("p", {
+      className: "account-security-meta",
+      text: `验证码已发送到 ${status.maskedEmail}`,
+    }),
+    element("label", {}, [
+      element("span", { text: "六位验证码" }),
+      element("input", {
+        name: "code",
+        type: "text",
+        inputmode: "numeric",
+        maxlength: 6,
+        attrs: { required: true, autocomplete: "one-time-code" },
+      }),
+    ]),
+    element("p", {
+      className: "form-message",
+      role: "status",
+      dataset: { formMessage: "verify" },
+    }),
+    element("button", {
+      className: "primary-button",
+      type: "submit",
+      text: "验证并继续",
+      dataset: { action: "verify-recovery-code" },
+    }),
+    renderResendControl(status.nextSendAt),
+  );
+  return element("section", { className: "account-security-panel" }, [form]);
+}
+
+function renderVerifiedSecurity(status) {
+  const panel = element("section", { className: "account-security-panel" }, [
+    element("p", {
+      className: "account-security-meta",
+      text: "已绑定找回邮箱，完整邮箱不会显示或公开。",
+    }),
+    element("p", {
+      className: "account-security-masked",
+      text: status.maskedEmail,
+      dataset: { maskedEmail: "true" },
+    }),
+  ]);
+  const form = element("form", {
+    className: "stack-form account-security-form",
+    id: "changeEmailForm",
+  });
+  form.append(
+    element("label", {}, [
+      element("span", { text: "新找回邮箱" }),
+      element("input", {
+        name: "newEmail",
+        type: "email",
+        attrs: { required: true, autocomplete: "email" },
+      }),
+    ]),
+    element("div", { attrs: { "data-turnstile": "" } }),
+    element("p", {
+      className: "form-message",
+      role: "status",
+      dataset: { formMessage: "change" },
+    }),
+    element("button", {
+      className: "secondary-button",
+      type: "submit",
+      text: "发送验证码并更换",
+      dataset: { action: "request-email-change" },
+    }),
+  );
+  renderTurnstile(form);
+  panel.append(form);
+  if (state.accountSecurityReturnHash) {
+    panel.append(
+      element("button", {
+        className: "primary-button",
+        type: "button",
+        text: "返回继续",
+        dataset: { action: "account-security-return" },
+      }),
+    );
+  }
+  return panel;
+}
+
+function renderChangingSecurity(status) {
+  const isOldStep = state.accountSecurityChangeStep !== 1;
+  const form = element("form", {
+    className: "stack-form account-security-form",
+    id: "changeConfirmForm",
+  });
+  form.append(
+    element("p", {
+      className: "account-security-meta",
+      text: isOldStep
+        ? `请先确认当前邮箱 ${status.maskedEmail} 收到的验证码`
+        : "请确认新邮箱收到的验证码",
+    }),
+    element("label", {}, [
+      element("span", { text: "六位验证码" }),
+      element("input", {
+        name: "code",
+        type: "text",
+        inputmode: "numeric",
+        maxlength: 6,
+        attrs: { required: true, autocomplete: "one-time-code" },
+      }),
+    ]),
+    element("p", {
+      className: "form-message",
+      role: "status",
+      dataset: { formMessage: "confirm" },
+    }),
+    element("button", {
+      className: "primary-button",
+      type: "submit",
+      text: isOldStep ? "确认原邮箱" : "确认新邮箱",
+      dataset: { action: isOldStep ? "confirm-old-email" : "confirm-new-email" },
+    }),
+  );
+  return element("section", { className: "account-security-panel" }, [form]);
+}
+
+async function renderAccountSecurity() {
+  showLoading("正在整理账号安全");
+  try {
+    if (!state.session) {
+      const shell = element("div", { className: "page-shell auth-gate" }, [
+        element("p", { className: "eyebrow", text: "ACCOUNT SECURITY" }),
+        element("h2", { text: "登录后管理账号安全" }),
+        element("p", {
+          text: "绑定找回邮箱后，忘记密码时可以通过验证码重置。",
+        }),
+        element("button", {
+          className: "primary-button",
+          type: "button",
+          text: "登录",
+          dataset: { action: "open-auth", returnHash: "#/account/security" },
+        }),
+      ]);
+      replaceContent(app, shell);
+      return;
+    }
+    const status = await service.getAccountSecurityStatus();
+    const shell = element("div", { className: "page-shell account-security" });
+    const head = element("div", { className: "account-security-head" }, [
+      element("p", { className: "eyebrow", text: "ACCOUNT SECURITY" }),
+      element("h2", { text: "账号安全" }),
+      element("p", {
+        className: "account-security-meta",
+        text: `已登录：${state.session.profile.pen_name}`,
+      }),
+    ]);
+    let body;
+    if (status.state === "unbound") body = renderUnboundSecurity();
+    else if (status.state === "pending") body = renderPendingSecurity(status);
+    else if (status.state === "changing") body = renderChangingSecurity(status);
+    else body = renderVerifiedSecurity(status);
+    shell.append(head, body);
+    replaceContent(app, shell);
+  } catch (error) {
+    showError("账号安全无法打开", error.message, true);
+  }
+}
+
+const accountSecurityActions = {
+  "request-recovery-code": async (form) => {
+    const data = new FormData(form);
+    const email = String(
+      data.get("recoveryEmail") ?? state.accountSecurityPendingEmail ?? "",
+    ).trim();
+    try {
+      const result = await service.requestRecoveryEmail(
+        email,
+        readTurnstileToken(form),
+      );
+      state.accountSecurityPendingEmail = email;
+      showToast(result.message, "success");
+      await refreshSessionSecurity();
+      await renderAccountSecurity();
+    } catch (error) {
+      const message = form.querySelector("[data-form-message]");
+      if (message) message.textContent = error.message;
+    }
+  },
+  "verify-recovery-code": async (form) => {
+    const code = String(new FormData(form).get("code") ?? "").trim();
+    try {
+      await service.verifyRecoveryEmail(code);
+      state.accountSecurityChangeStep = 0;
+      showToast("找回邮箱已验证。", "success");
+      await refreshSessionSecurity();
+      await renderAccountSecurity();
+    } catch (error) {
+      const message = form.querySelector("[data-form-message]");
+      if (message) message.textContent = error.message;
+    }
+  },
+  "request-email-change": async (form) => {
+    const newEmail = String(new FormData(form).get("newEmail") ?? "").trim();
+    try {
+      const result = await service.requestRecoveryEmailChange(
+        newEmail,
+        readTurnstileToken(form),
+      );
+      state.accountSecurityChangeStep = 0;
+      showToast(result.message, "success");
+      await refreshSessionSecurity();
+      await renderAccountSecurity();
+    } catch (error) {
+      const message = form.querySelector("[data-form-message]");
+      if (message) message.textContent = error.message;
+    }
+  },
+  "confirm-old-email": async (form) => {
+    const code = String(new FormData(form).get("code") ?? "").trim();
+    try {
+      const result = await service.confirmRecoveryEmailChangeOld(code);
+      state.accountSecurityChangeStep = 1;
+      showToast(result.message, "success");
+      await refreshSessionSecurity();
+      await renderAccountSecurity();
+    } catch (error) {
+      const message = form.querySelector("[data-form-message]");
+      if (message) message.textContent = error.message;
+    }
+  },
+  "confirm-new-email": async (form) => {
+    const code = String(new FormData(form).get("code") ?? "").trim();
+    try {
+      await service.confirmRecoveryEmailChangeNew(code);
+      state.accountSecurityChangeStep = 0;
+      showToast("找回邮箱已更新。", "success");
+      await refreshSessionSecurity();
+      await renderAccountSecurity();
+    } catch (error) {
+      const message = form.querySelector("[data-form-message]");
+      if (message) message.textContent = error.message;
+    }
+  },
+};
 
 async function renderAuthor(profileId) {
   showLoading("正在整理作者作品");
@@ -1900,6 +2299,7 @@ async function renderCurrentRoute() {
     else if (route.name === "work") await renderWork(route.id);
     else if (route.name === "author") await renderAuthor(route.id);
     else if (route.name === "write") renderWrite();
+    else if (route.name === "account-security") await renderAccountSecurity();
     else if (route.name === "discussions") await renderDiscussions();
     else if (route.name === "submissions") renderSubmissions();
     else renderNotFound();
@@ -1977,15 +2377,25 @@ async function handleAuthSubmit(form, mode) {
             studentNumber,
             password,
             penName: String(data.get("penName") ?? "").trim(),
+            recoveryEmail: String(data.get("recoveryEmail") ?? "").trim(),
+            captchaToken: readTurnstileToken(form),
           });
+    if (mode === "register" && state.session.accountSecurity?.state === "pending") {
+      state.accountSecurityPendingEmail = String(
+        data.get("recoveryEmail") ?? "",
+      ).trim();
+    }
     form.reset();
     closeAuth();
     updateHeader();
     await refreshWorks();
-    showToast(
-      mode === "login" ? "已登录，欢迎回来。" : "账户已创建，可以开始写作。",
-      "success",
-    );
+    const welcomeMessage =
+      mode === "login"
+        ? "已登录，欢迎回来。"
+        : state.session.accountSecurity?.state === "pending"
+          ? "账户已创建，请先验证找回邮箱。"
+          : "账户已创建，可以开始写作。";
+    showToast(welcomeMessage, "success");
     const returnHash = resolveAuthReturnHash(state.authReturnHash);
     state.authReturnHash = null;
     if (returnHash && window.location.hash !== returnHash) {
@@ -1999,10 +2409,7 @@ async function handleAuthSubmit(form, mode) {
 }
 
 async function handleLike(button) {
-  if (!state.session) {
-    openAuth("login", window.location.hash);
-    return;
-  }
+  if (!requireVerifiedWrite(window.location.hash)) return;
   const workId = button.dataset.workId;
   const countNode = button.querySelector(`[data-like-count="${CSS.escape(workId)}"]`);
   const labelNode = button.querySelector(`[data-like-label="${CSS.escape(workId)}"]`);
@@ -2045,6 +2452,28 @@ document.addEventListener("click", async (event) => {
     openAuth("login", trigger.dataset.returnHash || null);
   } else if (action === "close-auth") {
     closeAuth();
+  } else if (action === "open-password-recovery") {
+    event.preventDefault();
+    closeAuth();
+    openPasswordRecovery();
+  } else if (action === "close-recovery") {
+    closePasswordRecovery();
+  } else if (action === "back-recovery-request") {
+    event.preventDefault();
+    const requestForm = document.querySelector("#recoveryRequestForm");
+    const completeForm = document.querySelector("#recoveryCompleteForm");
+    completeForm.hidden = true;
+    completeForm.reset();
+    requestForm.hidden = false;
+    requestForm.querySelector('[name="studentNumber"]').focus();
+  } else if (action === "account-security-return") {
+    const target = state.accountSecurityReturnHash || "#/";
+    state.accountSecurityReturnHash = null;
+    window.location.hash = target;
+  } else if (action in accountSecurityActions) {
+    event.preventDefault();
+    const form = trigger.closest("form");
+    await accountSecurityActions[action](form);
   } else if (action === "open-profile-editor") {
     openProfileEditor();
   } else if (action === "close-profile-editor") {
@@ -2181,6 +2610,7 @@ document.addEventListener("click", async (event) => {
       if (!form.hidden) form.querySelector("textarea").focus();
     }
   } else if (action === "delete-comment") {
+    if (!requireVerifiedWrite(window.location.hash)) return;
     const confirmed = await requestConfirmation(
       "删除后会保留回复结构，并显示“该评论已由作者删除”。",
     );
@@ -2190,10 +2620,12 @@ document.addEventListener("click", async (event) => {
         showToast("评论已删除。", "success");
         await renderWork(trigger.dataset.workId);
       } catch (error) {
+        if (routeToAccountSecurityIfUnverified(error)) return;
         showToast(error.message);
       }
     }
   } else if (action === "delete-work") {
+    if (!requireVerifiedWrite(window.location.hash)) return;
     const confirmed = await requestConfirmation(
       "作品删除后无法从平台恢复，相关点赞和评论也会一并移除。",
     );
@@ -2204,10 +2636,12 @@ document.addEventListener("click", async (event) => {
         showToast("作品已删除。", "success");
         window.location.hash = "#/";
       } catch (error) {
+        if (routeToAccountSecurityIfUnverified(error)) return;
         showToast(error.message);
       }
     }
   } else if (action === "toggle-featured") {
+    if (!requireVerifiedWrite(window.location.hash)) return;
     const workId = trigger.dataset.workId;
     const previous = trigger.dataset.featured === "true";
     const next = !previous;
@@ -2218,6 +2652,7 @@ document.addEventListener("click", async (event) => {
       showToast("编辑推荐状态已更新。", "success");
     } catch (error) {
       setFeaturedLocally(workId, previous);
+      if (routeToAccountSecurityIfUnverified(error)) return;
       showToast(error.message);
     } finally {
       if (trigger.isConnected) trigger.disabled = false;
@@ -2246,6 +2681,7 @@ document.addEventListener("submit", async (event) => {
     renderHome();
   } else if (form.id === "writingForm") {
     event.preventDefault();
+    if (!requireVerifiedWrite(window.location.hash)) return;
     const data = new FormData(form);
     const submit = form.querySelector("[type=submit]");
     submit.disabled = true;
@@ -2262,12 +2698,18 @@ document.addEventListener("submit", async (event) => {
       showToast("作品已发布。", "success");
       window.location.hash = `#/works/${encodeURIComponent(work.id)}`;
     } catch (error) {
+      if (routeToAccountSecurityIfUnverified(error)) {
+        submit.disabled = false;
+        submit.textContent = "发布作品";
+        return;
+      }
       showToast(`作品没有发布：${error.message}`);
       submit.disabled = false;
       submit.textContent = "发布作品";
     }
   } else if (form.matches("[data-comment-form]")) {
     event.preventDefault();
+    if (!requireVerifiedWrite(window.location.hash)) return;
     const workId = form.dataset.commentForm;
     const content = new FormData(form).get("content");
     try {
@@ -2276,10 +2718,12 @@ document.addEventListener("submit", async (event) => {
       showToast("评论已发表。", "success");
       await renderWork(workId);
     } catch (error) {
+      if (routeToAccountSecurityIfUnverified(error)) return;
       showToast(error.message);
     }
   } else if (form.matches("[data-reply-form]")) {
     event.preventDefault();
+    if (!requireVerifiedWrite(window.location.hash)) return;
     const workId = form.dataset.workId;
     const content = new FormData(form).get("content");
     try {
@@ -2287,10 +2731,89 @@ document.addEventListener("submit", async (event) => {
       showToast("回复已发表。", "success");
       await renderWork(workId);
     } catch (error) {
+      if (routeToAccountSecurityIfUnverified(error)) return;
       showToast(error.message);
+    }
+  } else if (form.id === "recoveryRequestForm") {
+    event.preventDefault();
+    const data = new FormData(form);
+    const studentNumber = String(data.get("studentNumber") ?? "").trim();
+    const message = document.querySelector(
+      '[data-form-message="recovery-request"]',
+    );
+    if (!validateStudentNumber(studentNumber)) {
+      message.textContent = "请输入 20 开头的十位学号。";
+      return;
+    }
+    const submit = form.querySelector("[type=submit]");
+    submit.disabled = true;
+    submit.textContent = "正在发送…";
+    try {
+      const result = await service.requestPasswordRecovery(
+        studentNumber,
+        readTurnstileToken(form),
+      );
+      message.textContent = result.message;
+      document.querySelector(
+        '[data-form-message="recovery-complete"]',
+      ).textContent = result.message;
+      const completeForm = document.querySelector("#recoveryCompleteForm");
+      completeForm.hidden = false;
+      form.hidden = true;
+      completeForm.querySelector('[name="studentNumber"]').value = studentNumber;
+      renderTurnstile(completeForm);
+      completeForm.querySelector('[name="code"]').focus();
+    } catch (error) {
+      message.textContent = error.message;
+    } finally {
+      submit.disabled = false;
+      submit.textContent = "发送验证码";
+    }
+  } else if (form.id === "recoveryCompleteForm") {
+    event.preventDefault();
+    const data = new FormData(form);
+    const studentNumber = String(data.get("studentNumber") ?? "").trim();
+    const code = String(data.get("code") ?? "").trim();
+    const newPassword = String(data.get("newPassword") ?? "");
+    const message = document.querySelector(
+      '[data-form-message="recovery-complete"]',
+    );
+    if (!validateStudentNumber(studentNumber)) {
+      message.textContent = "请输入 20 开头的十位学号。";
+      return;
+    }
+    if (!validatePassword(newPassword)) {
+      message.textContent = "密码至少八位，并同时包含字母和数字。";
+      return;
+    }
+    const submit = form.querySelector("[type=submit]");
+    submit.disabled = true;
+    submit.textContent = "正在重设…";
+    try {
+      const result = await service.completePasswordRecovery(
+        studentNumber,
+        code,
+        newPassword,
+        readTurnstileToken(form),
+      );
+      message.textContent = result.message;
+      closePasswordRecovery();
+      showToast(result.message, "success");
+    } catch (error) {
+      message.textContent = error.message;
+    } finally {
+      submit.disabled = false;
+      submit.textContent = "重设密码";
+    }
+  } else if (form.matches(".account-security-form")) {
+    event.preventDefault();
+    const action = form.querySelector("[data-action]")?.dataset.action;
+    if (action && accountSecurityActions[action]) {
+      await accountSecurityActions[action](form);
     }
   } else if (form.id === "profileForm") {
     event.preventDefault();
+    if (!requireVerifiedWrite(window.location.hash)) return;
     const data = new FormData(form);
     const penNameInput = form.elements.namedItem("penName");
     const submit = form.querySelector('[type="submit"]');
@@ -2316,6 +2839,11 @@ document.addEventListener("submit", async (event) => {
       closeProfileEditor();
       await renderAuthor(profile.id);
     } catch (error) {
+      if (routeToAccountSecurityIfUnverified(error)) {
+        submit.disabled = false;
+        submit.textContent = "保存公开资料";
+        return;
+      }
       showToast(error.message);
       submit.disabled = false;
       submit.textContent = "保存公开资料";
@@ -2350,6 +2878,12 @@ document.addEventListener("input", (event) => {
 });
 
 authDialog.addEventListener("close", () => {
+  document.querySelectorAll("[data-form-message]").forEach((message) => {
+    message.textContent = "";
+  });
+});
+
+recoveryDialog.addEventListener("close", () => {
   document.querySelectorAll("[data-form-message]").forEach((message) => {
     message.textContent = "";
   });

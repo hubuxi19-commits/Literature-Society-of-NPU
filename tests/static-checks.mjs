@@ -239,3 +239,37 @@ test("浏览器检查保留预览断言但不写入内部导出预览截图", as
   assert.match(browserCheck, /\.export-preview-image/);
   assert.doesNotMatch(browserCheck, /exportPreviewScreenshot|export-preview\.png/);
 });
+
+test("账号安全页和找回密码表单不公开邮箱", async () => {
+  const [html, app] = await Promise.all([
+    readFile(new URL("../index.html", import.meta.url), "utf8"),
+    readFile(new URL("../js/app.js", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(html, /data-action="open-password-recovery"/);
+  assert.match(html, /name="recoveryEmail"/);
+  assert.match(html, /邮箱仅用于账号验证与找回密码/);
+  assert.match(html, /id="recoveryDialog"/);
+  assert.match(app, /#\/account\/security/);
+  assert.match(app, /requireVerifiedWrite/);
+  assert.match(app, /renderAccountSecurity/);
+  assert.match(app, /account-security/);
+  assert.doesNotMatch(html, /accounts\.wenyuan\.invalid/);
+});
+
+test("账号安全与找回密码表单满足可访问性与视觉约束", async () => {
+  const css = await readFile(
+    new URL("../assets/styles.css", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(css, /\.account-security-meta[\s\S]*?font-size:\s*13px/);
+  assert.match(css, /\.account-security-form input[\s\S]*?min-height:\s*44px/);
+  assert.match(css, /\.account-security-form button[\s\S]*?min-height:\s*44px/);
+  assert.match(css, /\.resend-button[\s\S]*?min-height:\s*44px/);
+  assert.match(
+    css,
+    /@media \(max-width:\s*768px\)[\s\S]*?\.account-security-form[\s\S]*?font-size:\s*16px/,
+  );
+  assert.match(css, /\.recovery-dialog[\s\S]*?color:\s*var\(--ink\)/);
+});

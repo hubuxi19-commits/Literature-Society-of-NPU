@@ -164,6 +164,13 @@
           </label>
           <p class="form-message" data-form-message="login" role="status"></p>
           <button class="primary-button" type="submit">登录并继续</button>
+          <p class="recovery-link-row">
+            <button
+              class="text-button"
+              type="button"
+              data-action="open-password-recovery"
+            >忘记密码？</button>
+          </p>
         </form>
       </section>
 
@@ -207,13 +214,109 @@
             >
             <small>至少八位，并同时包含字母和数字。</small>
           </label>
+          <label>
+            <span>找回邮箱</span>
+            <input
+              name="recoveryEmail"
+              type="email"
+              autocomplete="email"
+              required
+            >
+          </label>
+          <div data-turnstile></div>
           <p class="privacy-note">
             学号仅用于登录，不会出现在作者主页、作品或评论中。
+            邮箱仅用于账号验证与找回密码，不接收评论、关注或其他社区消息。
           </p>
           <p class="form-message" data-form-message="register" role="status"></p>
           <button class="primary-button" type="submit">注册并进入</button>
         </form>
       </section>
+    </dialog>
+
+    <dialog
+      class="modal recovery-dialog"
+      id="recoveryDialog"
+      aria-labelledby="recoveryTitle"
+    >
+      <div class="modal-head">
+        <div>
+          <p class="eyebrow">ACCOUNT RECOVERY</p>
+          <h2 id="recoveryTitle">找回密码</h2>
+        </div>
+        <button
+          class="close-button"
+          type="button"
+          data-action="close-recovery"
+          aria-label="关闭找回密码窗口"
+        >
+          关闭
+        </button>
+      </div>
+
+      <form id="recoveryRequestForm" class="stack-form">
+        <label>
+          <span>学号</span>
+          <input
+            name="studentNumber"
+            type="text"
+            inputmode="numeric"
+            autocomplete="username"
+            maxlength="10"
+            pattern="20[0-9]{8}"
+            required
+          >
+        </label>
+        <div data-turnstile></div>
+        <p class="form-message" data-form-message="recovery-request" role="status"></p>
+        <button class="primary-button" type="submit">发送验证码</button>
+      </form>
+
+      <form id="recoveryCompleteForm" class="stack-form" hidden>
+        <label>
+          <span>学号</span>
+          <input
+            name="studentNumber"
+            type="text"
+            inputmode="numeric"
+            autocomplete="username"
+            maxlength="10"
+            pattern="20[0-9]{8}"
+            required
+          >
+        </label>
+        <label>
+          <span>验证码</span>
+          <input
+            name="code"
+            type="text"
+            inputmode="numeric"
+            autocomplete="one-time-code"
+            maxlength="6"
+            required
+          >
+        </label>
+        <label>
+          <span>新密码</span>
+          <input
+            name="newPassword"
+            type="password"
+            autocomplete="new-password"
+            minlength="8"
+            required
+          >
+        </label>
+        <div data-turnstile></div>
+        <p class="form-message" data-form-message="recovery-complete" role="status"></p>
+        <button class="primary-button" type="submit">重设密码</button>
+        <p class="recovery-link-row">
+          <button
+            class="text-button"
+            type="button"
+            data-action="back-recovery-request"
+          >← 返回重新输入</button>
+        </p>
+      </form>
     </dialog>
 
     <dialog

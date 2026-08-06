@@ -925,7 +925,7 @@ function createSupabaseService(config) {
       await requireRemoteSession();
       return invokeFunction("account-email", {
         action: "request-change",
-        email: newEmail,
+        newEmail,
         captchaToken,
       });
     },

@@ -1684,6 +1684,92 @@ main {
   border-color: #8aaa94;
 }
 
+.recovery-dialog {
+  padding: 2rem;
+  color: var(--ink);
+}
+
+.recovery-link-row {
+  margin: 0;
+}
+
+.recovery-link-row .text-button {
+  padding: 0.5rem 0;
+}
+
+.account-security {
+  animation: page-enter 0.3s ease both;
+}
+
+.account-security-head {
+  margin-bottom: 2rem;
+}
+
+.account-security-head h2 {
+  margin: 0 0 0.5rem;
+  font-family: var(--serif-title);
+  font-size: clamp(1.8rem, 4vw, 2.6rem);
+}
+
+.account-security-panel {
+  display: grid;
+  gap: 1.2rem;
+  max-width: 34rem;
+}
+
+.account-security-meta {
+  margin: 0;
+  color: var(--soft-ink);
+  font-family: var(--utility);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.account-security-masked {
+  margin: 0;
+  padding: 0.9rem 1rem;
+  border-left: 3px solid var(--vermilion);
+  background: var(--paper);
+  font-family: var(--utility);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.account-security-form {
+  gap: 1.2rem;
+}
+
+.account-security-form input {
+  min-height: 44px;
+  font-size: 16px;
+}
+
+.account-security-form button {
+  min-height: 44px;
+}
+
+.resend-row {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  margin: 0;
+}
+
+.resend-button {
+  min-height: 44px;
+}
+
+.resend-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.resend-countdown {
+  color: var(--soft-ink);
+  font-family: var(--utility);
+  font-size: 0.76rem;
+}
+
 @keyframes page-enter {
   from {
     opacity: 0;
@@ -1948,6 +2034,10 @@ main {
   .rules-grid {
     grid-template-columns: 1fr;
     gap: 3rem;
+  }
+
+  .account-security-form {
+    font-size: 16px;
   }
 
   .site-footer {

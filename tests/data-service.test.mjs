@@ -420,6 +420,81 @@ test("Supabase 服务缓存账号安全状态并按函数名转发动作", async
   ]);
 });
 
+test("Supabase 服务按动作转发邮箱变更请求与确认", async () => {
+  const invoked = [];
+  const fakeClient = {
+    auth: {
+      getSession: async () => ({
+        data: {
+          session: {
+            user: {
+              id: "user-1",
+              email: "2023123456@accounts.wenyuan.invalid",
+            },
+          },
+        },
+        error: null,
+      }),
+    },
+    from: () => ({
+      select: () => ({
+        eq: () => ({
+          single: async () => ({
+            data: {
+              id: "user-1",
+              pen_name: "松声",
+              bio: "",
+              role: "member",
+            },
+            error: null,
+          }),
+        }),
+      }),
+    }),
+    functions: {
+      invoke: async (name, { body }) => {
+        invoked.push([name, body]);
+        if (name === "account-email" && body.action === "status") {
+          return {
+            data: {
+              state: "verified",
+              maskedEmail: "s***g@e***e.com",
+              nextSendAt: null,
+            },
+            error: null,
+          };
+        }
+        return { data: {}, error: null };
+      },
+    },
+  };
+  const service = createDataService({
+    mode: "supabase",
+    supabaseUrl: "https://project.supabase.co",
+    supabasePublishableKey: "sb_publishable_test",
+    clientOverride: fakeClient,
+  });
+  await service.getSession();
+
+  await service.requestRecoveryEmailChange("new@example.com", "t");
+  assert.deepEqual(invoked.at(-1), [
+    "account-email",
+    { action: "request-change", newEmail: "new@example.com", captchaToken: "t" },
+  ]);
+
+  await service.confirmRecoveryEmailChangeOld("123456");
+  assert.deepEqual(invoked.at(-1), [
+    "account-email",
+    { action: "confirm-change-old", code: "123456" },
+  ]);
+
+  await service.confirmRecoveryEmailChangeNew("654321");
+  assert.deepEqual(invoked.at(-1), [
+    "account-email",
+    { action: "confirm-change-new", code: "654321" },
+  ]);
+});
+
 test("Supabase 注册绑定失败返回 deliveryWarning 且重认证复用会话邮箱", async () => {
   const invoked = [];
   const fakeClient = {

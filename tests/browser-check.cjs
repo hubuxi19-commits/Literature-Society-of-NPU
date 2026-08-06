@@ -869,6 +869,136 @@ async function mobileProfileAuthFlow(browser, browserMessages) {
   await context.close();
 }
 
+async function accountSecurityFlow(browser, browserMessages) {
+  const context = await browser.newContext({
+    viewport: { width: 1280, height: 900 },
+  });
+  const page = await context.newPage();
+  await useDemoConfig(page);
+  page.setDefaultTimeout(8000);
+  page.on("console", (message) => {
+    if (message.type() === "error") {
+      browserMessages.push(`account security console: ${message.text()}`);
+    }
+  });
+  page.on("pageerror", (error) => {
+    browserMessages.push(`account security pageerror: ${error.message}`);
+  });
+
+  await page.goto(baseUrl);
+  await page.waitForLoadState("networkidle");
+
+  // 5. 已验证成员：账号安全页只显示掩码邮箱，不显示完整邮箱。
+  await login(page, "2023123456", "wenyuan88");
+  await goToHash(page, "#/account/security", "账号安全");
+  await expectVisible(page.locator('[data-masked-email="true"]'), "掩码邮箱");
+  const verifiedSecurityText = await page.locator("main").innerText();
+  if (!verifiedSecurityText.includes("s***g@e***e.com")) {
+    throw new Error("账号安全页没有显示掩码邮箱");
+  }
+  if (/song@example\.com/.test(verifiedSecurityText)) {
+    throw new Error("账号安全页泄露了完整找回邮箱");
+  }
+
+  // 1. 已验证成员仍可发布新作。
+  await goToHash(page, "#/write", "写一篇新作");
+  await page.locator('#writingForm [name="title"]').fill("安全验证后的新作");
+  await page
+    .locator('#writingForm [name="content"]')
+    .fill("验证找回邮箱后继续写作的正文。");
+  await page.getByRole("button", { name: "发布作品" }).click();
+  await page.waitForURL(/#\/works\//);
+  await page
+    .getByRole("heading", { name: "安全验证后的新作", exact: true })
+    .waitFor();
+
+  await page.locator("#accountButton").click();
+  await page.getByRole("button", { name: "退出登录" }).click();
+  await goToHash(page, "#/", "让作品被读见");
+
+  // 4. 密码找回对已知与未知学号返回相同文案。
+  const requestCodeNote = async (studentNumber) => {
+    await page.locator("#accountButton").click();
+    await expectVisible(page.locator("#authDialog"), "登录窗口");
+    await page.getByRole("button", { name: "忘记密码？" }).click();
+    await expectVisible(page.locator("#recoveryDialog"), "找回密码窗口");
+    await page
+      .locator('#recoveryRequestForm [name="studentNumber"]')
+      .fill(studentNumber);
+    await page.getByRole("button", { name: "发送验证码" }).click();
+    await expectVisible(page.locator("#recoveryCompleteForm"), "重设密码表单");
+    const note = await page
+      .locator('[data-form-message="recovery-complete"]')
+      .textContent();
+    await page
+      .locator("#recoveryDialog")
+      .getByRole("button", { name: "关闭找回密码窗口" })
+      .click();
+    await page.locator("#recoveryDialog").waitFor({ state: "hidden" });
+    return note;
+  };
+  const knownNote = await requestCodeNote("2023123456");
+  const unknownNote = await requestCodeNote("2099999999");
+  if (knownNote !== unknownNote) {
+    throw new Error(
+      `已知与未知学号的找回文案不一致：${knownNote} vs ${unknownNote}`,
+    );
+  }
+  if (!knownNote.includes("如果账号存在且已绑定邮箱")) {
+    throw new Error(`找回文案不是枚举安全文案：${knownNote}`);
+  }
+
+  // 2. 新成员带找回邮箱注册：可以阅读，写操作被拦截并跳转账号安全页。
+  await page.locator("#accountButton").click();
+  await expectVisible(page.locator("#authDialog"), "登录窗口");
+  await page.getByRole("tab", { name: "注册" }).click();
+  await page.locator('#registerForm [name="studentNumber"]').fill("2024888888");
+  await page.locator('#registerForm [name="penName"]').fill("新墨");
+  await page.locator('#registerForm [name="password"]').fill("newmember88");
+  await page
+    .locator('#registerForm [name="recoveryEmail"]')
+    .fill("newink@example.com");
+  await page.getByRole("button", { name: "注册并进入" }).click();
+  await page.locator("#authDialog").waitFor({ state: "hidden" });
+  await expectVisible(
+    page.getByRole("heading", { name: "让作品被读见" }),
+    "新成员可以阅读首页",
+  );
+
+  await page.getByRole("link", { name: "开始写作" }).click();
+  await expectVisible(
+    page.getByRole("heading", { name: "账号安全" }),
+    "写入拦截跳转账号安全页",
+  );
+  await expectVisible(page.locator("#toast"), "写入拦截提示");
+  const blockToast = await page.locator("#toast").textContent();
+  if (!blockToast.includes("请先验证找回邮箱")) {
+    throw new Error(`写入拦截提示错误：${blockToast}`);
+  }
+
+  // 3. 验证码 123456 验证后恢复写作能力。
+  await page.locator('#verifyRecoveryForm [name="code"]').fill("123456");
+  await page.getByRole("button", { name: "验证并继续" }).click();
+  await expectVisible(page.locator('[data-masked-email="true"]'), "验证后的掩码邮箱");
+  await page.getByRole("button", { name: "返回继续" }).click();
+  await page.waitForURL(/#\/write$/);
+  await expectVisible(
+    page.getByRole("heading", { name: "写一篇新作" }),
+    "验证后回到写作台",
+  );
+  await page.locator('#writingForm [name="title"]').fill("验证后的第一作");
+  await page
+    .locator('#writingForm [name="content"]')
+    .fill("验证找回邮箱后成功发布的作品正文。");
+  await page.getByRole("button", { name: "发布作品" }).click();
+  await page.waitForURL(/#\/works\//);
+  await page
+    .getByRole("heading", { name: "验证后的第一作", exact: true })
+    .waitFor();
+
+  await context.close();
+}
+
 (async () => {
   const browserMessages = [];
   const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE;
@@ -880,6 +1010,7 @@ async function mobileProfileAuthFlow(browser, browserMessages) {
     const desktopScreenshots = await desktopFlow(browser, browserMessages);
     const mobileScreenshots = await mobileFlow(browser, browserMessages);
     await mobileProfileAuthFlow(browser, browserMessages);
+    await accountSecurityFlow(browser, browserMessages);
     if (browserMessages.length) {
       throw new Error(`浏览器控制台出现错误：\n${browserMessages.join("\n")}`);
     }

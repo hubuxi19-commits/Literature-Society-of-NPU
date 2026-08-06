@@ -132,6 +132,14 @@ test("哈希路由识别全部页面并回退首页", () => {
   assert.deepEqual(parseRoute("#/missing"), { name: "not-found" });
 });
 
+test("账号安全路由解析为独立路由", () => {
+  assert.deepEqual(parseRoute("#/account/security"), {
+    name: "account-security",
+  });
+  assert.deepEqual(parseRoute("#/account/security/extra"), { name: "not-found" });
+  assert.deepEqual(parseRoute("#/account/"), { name: "not-found" });
+});
+
 test("作品按关键词、分类和热度过滤排序且不修改输入", () => {
   const works = [
     {
