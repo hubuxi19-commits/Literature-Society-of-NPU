@@ -1,6 +1,5 @@
-import { createAccountStore } from "../_shared/account-store.ts";
+import { createClient } from "npm:@supabase/supabase-js@2";
 import { sendSecurityEmail } from "../_shared/brevo.ts";
-import { withSupabase } from "../_shared/clients.ts";
 import { createTrustedDenoServeHandler } from "../_shared/edge-runtime.mjs";
 import {
   configuredAllowedOrigins,
@@ -8,31 +7,22 @@ import {
   requiredEnvironment,
 } from "../_shared/http.ts";
 import { verifyTurnstile } from "../_shared/turnstile.ts";
-import { createAccountEmailHandler } from "./logic.mjs";
+import { createAccountEmailProductionHandler } from "./runtime.mjs";
 
 const allowedOrigins = configuredAllowedOrigins();
 const tokenPepper = requiredEnvironment("ACCOUNT_TOKEN_PEPPER");
 const rateLimitPepper = requiredEnvironment("AUTH_RATE_LIMIT_PEPPER");
 const logger = createSafeRequestLogger();
 
-const authenticatedHandler = withSupabase(
-  { auth: "user" },
-  async (request, context) => {
-    const handler = createAccountEmailHandler({
-      store: context.adminClient ? createAccountStore(context.adminClient) : {},
-      allowedOrigins,
-      tokenPepper,
-      rateLimitPepper,
-      verifyTurnstile,
-      sendSecurityEmail,
-      logger,
-    });
-    return handler(request, {
-      userClaims: context.userClaims,
-      authFailure: context.authFailure,
-      trustedNetworkIdentity: context.trustedNetworkIdentity,
-    });
-  },
-);
+const handler = createAccountEmailProductionHandler({
+  createClientImpl: createClient,
+  envGet: (name) => Deno.env.get(name),
+  allowedOrigins,
+  tokenPepper,
+  rateLimitPepper,
+  verifyTurnstile,
+  sendSecurityEmail,
+  logger,
+});
 
-Deno.serve(createTrustedDenoServeHandler(authenticatedHandler));
+Deno.serve(createTrustedDenoServeHandler(handler));

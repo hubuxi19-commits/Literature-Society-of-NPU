@@ -11,6 +11,9 @@ import {
   createSupabaseRequestClients,
   parseSupabaseSecretKeys,
 } from "../supabase/functions/_shared/clients-core.mjs";
+import {
+  createAccountEmailProductionHandler,
+} from "../supabase/functions/account-email/runtime.mjs";
 import { createAccountStore } from "../supabase/functions/_shared/account-store.ts";
 
 import { createTrustedDenoServeHandler } from "../supabase/functions/_shared/edge-runtime.mjs";
@@ -130,7 +133,9 @@ class MemoryAccountStore {
   async markTokenUsed({ tokenId, usedAt }) {
     this.events.push(["mark-used", tokenId, usedAt]);
     const token = this.tokens.find(({ id }) => id === tokenId);
-    if (token) token.usedAt = usedAt;
+    if (!token || token.usedAt !== null) return false;
+    token.usedAt = usedAt;
+    return true;
   }
 
   async consumeToken({ tokenDigest, purpose, userId, maxAttempts }) {
@@ -156,14 +161,26 @@ class MemoryAccountStore {
     return { ...token };
   }
 
-  async restoreConsumedToken({ tokenId, consumedAttemptCount }) {
-    this.events.push(["restore-token", tokenId, consumedAttemptCount]);
+  async restoreConsumedToken({
+    tokenId,
+    consumedAttemptCount,
+    consumedUsedAt,
+  }) {
+    this.events.push([
+      "restore-token",
+      tokenId,
+      consumedAttemptCount,
+      consumedUsedAt,
+    ]);
     const token = this.tokens.find(({ id }) => id === tokenId);
-    if (!token || token.usedAt === null || token.attemptCount !== consumedAttemptCount) {
-      throw new Error("restore target mismatch");
-    }
+    if (
+      !token ||
+      token.usedAt !== consumedUsedAt ||
+      token.attemptCount !== consumedAttemptCount
+    ) return false;
     token.usedAt = null;
-    token.attemptCount -= 1;
+    token.attemptCount = consumedAttemptCount - 1;
+    return true;
   }
 
   async upsertRecoveryEmail({ userId, emailNormalized, verifiedAt }) {
@@ -1292,6 +1309,7 @@ test("failed token restoration logs only safe metadata and returns 503", async (
 
 test("account store restores only the exact consumed token row", async () => {
   const calls = [];
+  let matched = true;
   const chain = {
     update(values) {
       calls.push(["update", values]);
@@ -1311,7 +1329,7 @@ test("account store restores only the exact consumed token row", async () => {
     },
     async maybeSingle() {
       calls.push(["maybeSingle"]);
-      return { data: { id: "token-atomic" }, error: null };
+      return { data: matched ? { id: "token-atomic" } : null, error: null };
     },
   };
   const store = createAccountStore({
@@ -1323,15 +1341,35 @@ test("account store restores only the exact consumed token row", async () => {
       throw new Error("restore must not call token consumption RPC");
     },
   });
-  await store.restoreConsumedToken({
+  const consumedUsedAt = "2026-08-02T08:00:00.123Z";
+  const restored = await store.restoreConsumedToken({
     tokenId: "token-atomic",
     consumedAttemptCount: 5,
+    consumedUsedAt,
   });
+  assert.equal(restored, true);
   assert.deepEqual(calls, [
     ["from", "account_action_tokens"],
     ["update", { used_at: null, attempt_count: 4 }],
     ["eq", "id", "token-atomic"],
-    ["not", "used_at", "is", null],
+    ["eq", "used_at", consumedUsedAt],
+    ["eq", "attempt_count", 5],
+    ["select", "id"],
+    ["maybeSingle"],
+  ]);
+  calls.length = 0;
+  matched = false;
+  const staleRestore = await store.restoreConsumedToken({
+    tokenId: "token-atomic",
+    consumedAttemptCount: 5,
+    consumedUsedAt,
+  });
+  assert.equal(staleRestore, false);
+  assert.deepEqual(calls, [
+    ["from", "account_action_tokens"],
+    ["update", { used_at: null, attempt_count: 4 }],
+    ["eq", "id", "token-atomic"],
+    ["eq", "used_at", consumedUsedAt],
     ["eq", "attempt_count", 5],
     ["select", "id"],
     ["maybeSingle"],
@@ -1393,4 +1431,259 @@ test("production client factory keeps secret keys out of Authorization", async (
   assert.equal(calls[1].apiKey, secretKey);
   assert.equal(calls[1].options.global?.headers?.Authorization, undefined);
   assert.equal(JSON.stringify(calls[1].options).includes(secretKey), false);
+});
+
+test("handler rejects a stale exact-restore CAS without leaking metadata", async () => {
+  const harness = createHarness();
+  await harness.handler(request({
+    action: "request-bind",
+    email: "person@example.com",
+    captchaToken: "captcha-bind",
+  }), { userClaims: claims() });
+  const token = harness.store.tokens[0];
+  harness.store.upsertRecoveryEmail = async () => {
+    const error = new Error("upsert failed");
+    error.code = "storage_unavailable";
+    throw error;
+  };
+  let restoreInput;
+  harness.store.restoreConsumedToken = async (input) => {
+    restoreInput = input;
+    return false;
+  };
+
+  const response = await harness.handler(request({
+    action: "verify-bind",
+    code: "123456",
+  }), { userClaims: claims() });
+  const body = await bodyOf(response);
+  assert.equal(response.status, 503);
+  assert.equal(body.error.code, "storage_unavailable");
+  assert.deepEqual(restoreInput, {
+    tokenId: token.id,
+    consumedAttemptCount: 1,
+    consumedUsedAt: NOW.toISOString(),
+  });
+  assert.equal(token.usedAt, NOW.toISOString());
+  assert.equal(
+    harness.logs.some(({ event }) =>
+      event === "account_email_compensation_failed"
+    ),
+    true,
+  );
+});
+
+test("account store marks only an unused token and reports whether CAS matched", async () => {
+  const calls = [];
+  let matched = true;
+  const chain = {
+    update(values) {
+      calls.push(["update", values]);
+      return this;
+    },
+    eq(column, value) {
+      calls.push(["eq", column, value]);
+      return this;
+    },
+    is(column, value) {
+      calls.push(["is", column, value]);
+      return this;
+    },
+    select(columns) {
+      calls.push(["select", columns]);
+      return this;
+    },
+    async maybeSingle() {
+      calls.push(["maybeSingle"]);
+      return { data: matched ? { id: "token-new" } : null, error: null };
+    },
+  };
+  const store = createAccountStore({
+    from(table) {
+      calls.push(["from", table]);
+      return chain;
+    },
+    rpc() {
+      throw new Error("mark must not call an RPC");
+    },
+  });
+  const usedAt = "2026-08-02T08:00:00.456Z";
+  const marked = await store.markTokenUsed({ tokenId: "token-new", usedAt });
+  assert.equal(marked, true);
+  assert.deepEqual(calls, [
+    ["from", "account_action_tokens"],
+    ["update", { used_at: usedAt }],
+    ["eq", "id", "token-new"],
+    ["is", "used_at", null],
+    ["select", "id"],
+    ["maybeSingle"],
+  ]);
+
+  calls.length = 0;
+  matched = false;
+  const staleMark = await store.markTokenUsed({ tokenId: "token-new", usedAt });
+  assert.equal(staleMark, false);
+});
+
+test("old confirmation never restores old code when new-token termination misses", async () => {
+  const harness = createHarness({
+    sendFailureOncePurposes: ["change_email_new"],
+  });
+  const oldToken = await beginEmailChange(harness);
+  let restoreCalls = 0;
+  harness.store.markTokenUsed = async ({ tokenId, usedAt }) => {
+    harness.events.push(["mark-used-missed", tokenId, usedAt]);
+    return false;
+  };
+  harness.store.restoreConsumedToken = async () => {
+    restoreCalls += 1;
+    return true;
+  };
+
+  const response = await harness.handler(request({
+    action: "confirm-change-old",
+    code: "123456",
+  }), { userClaims: claims() });
+  const body = await bodyOf(response);
+  assert.equal(response.status, 503);
+  assert.equal(body.error.code, "storage_unavailable");
+  assert.equal(restoreCalls, 0);
+  assert.equal(oldToken.usedAt, NOW.toISOString());
+  assert.equal(
+    harness.logs.some(({ event }) =>
+      event === "account_email_compensation_failed"
+    ),
+    true,
+  );
+});
+
+test("production runtime confirms recovery change without mutating Auth email", async () => {
+  const adminEvents = [];
+  let authEmailUpdates = 0;
+  let queryMode = "select";
+  const query = {
+    select(columns) {
+      adminEvents.push(["select", columns]);
+      return this;
+    },
+    update(values) {
+      queryMode = "update";
+      adminEvents.push(["update", values]);
+      return this;
+    },
+    eq(column, value) {
+      adminEvents.push(["eq", column, value]);
+      return this;
+    },
+    neq(column, value) {
+      adminEvents.push(["neq", column, value]);
+      return this;
+    },
+    limit(value) {
+      adminEvents.push(["limit", value]);
+      return this;
+    },
+    async maybeSingle() {
+      adminEvents.push(["maybeSingle", queryMode]);
+      return {
+        data: queryMode === "update" ? { user_id: USER_ID } : null,
+        error: null,
+      };
+    },
+  };
+  const adminClient = {
+    auth: {
+      admin: {
+        async updateUserById() {
+          authEmailUpdates += 1;
+          throw new Error("Auth email mutation is forbidden");
+        },
+      },
+    },
+    from(table) {
+      queryMode = "select";
+      adminEvents.push(["from", table]);
+      return query;
+    },
+    async rpc(name) {
+      assert.equal(name, "consume_account_action_token");
+      return {
+        data: [{
+          id: "token-runtime",
+          user_id: USER_ID,
+          purpose: "change_email_new",
+          token_digest: "\\x00",
+          email_normalized: "person@example.com",
+          next_email_normalized: "next@example.net",
+          expires_at: "2026-08-02T08:10:00.000Z",
+          attempt_count: 1,
+          max_attempts: 5,
+          used_at: NOW.toISOString(),
+          created_at: "2026-08-02T07:59:00.000Z",
+        }],
+        error: null,
+      };
+    },
+  };
+  const publishableKey = "sb_publishable_runtime";
+  const secretKey = "sb_secret_runtime";
+  const createClientImpl = (_url, apiKey) => {
+    if (apiKey === publishableKey) {
+      return {
+        auth: {
+          async getClaims(jwt) {
+            assert.equal(jwt, "runtime.user.jwt");
+            return { data: { claims: claims() }, error: null };
+          },
+        },
+      };
+    }
+    assert.equal(apiKey, secretKey);
+    return adminClient;
+  };
+  const handler = createAccountEmailProductionHandler({
+    createClientImpl,
+    envGet: (name) => ({
+      SUPABASE_URL: "https://project.supabase.co",
+      SUPABASE_PUBLISHABLE_KEY: publishableKey,
+      SUPABASE_SECRET_KEYS: JSON.stringify({ default: secretKey }),
+    })[name],
+    allowedOrigins: [ORIGIN],
+    tokenPepper: "runtime-token-pepper",
+    rateLimitPepper: "runtime-rate-pepper",
+    verifyTurnstile: async () => {
+      throw new Error("confirm-new must not call Turnstile");
+    },
+    sendSecurityEmail: async () => {
+      throw new Error("confirm-new must not send email");
+    },
+    logger: () => {},
+    now: () => new Date(NOW),
+    createRequestId: () => "runtime-request-id",
+  });
+
+  const response = await handler(request({
+    action: "confirm-change-new",
+    code: "654321",
+  }, {
+    headers: { authorization: "Bearer runtime.user.jwt" },
+  }), { trustedNetworkIdentity: "198.51.100.24" });
+  const body = await bodyOf(response);
+  assert.equal(response.status, 200);
+  assert.equal(body.state, "verified");
+  assert.equal(authEmailUpdates, 0);
+  assert.equal(
+    adminEvents.some(([event, values]) =>
+      event === "update" &&
+      values.email_normalized === "next@example.net" &&
+      values.verified_at === NOW.toISOString()
+    ),
+    true,
+  );
+  assert.equal(
+    adminEvents.some(([event, column, value]) =>
+      event === "eq" && column === "user_id" && value === USER_ID
+    ),
+    true,
+  );
 });

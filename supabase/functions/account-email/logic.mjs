@@ -185,7 +185,7 @@ export function createAccountEmailHandler({
     code,
     requestId,
     currentTime,
-  }, onTokenInserted = () => {}) {
+  }, lifecycle = {}) {
     const tokenDigest = await digestCode(purpose, userId, code);
     const expiresAt = new Date(
       currentTime.getTime() + SECURITY_CODE_EXPIRES_MINUTES * 60_000,
@@ -199,7 +199,7 @@ export function createAccountEmailHandler({
       expiresAt,
       maxAttempts: SECURITY_CODE_MAX_ATTEMPTS,
     });
-    onTokenInserted(token);
+    lifecycle.onTokenInserted?.(token);
     try {
       await sendSecurityEmail({
         to: purpose === "change_email_new" ? nextEmailNormalized : emailNormalized,
@@ -209,7 +209,13 @@ export function createAccountEmailHandler({
         requestId,
       });
     } catch {
-      await store.markTokenUsed({ tokenId: token.id, usedAt: currentTime.toISOString() });
+      try {
+        await markTokenTerminal(token, currentTime, requestId);
+      } catch (error) {
+        lifecycle.onTokenTerminationFailed?.(token);
+        throw error;
+      }
+      lifecycle.onTokenTerminated?.(token);
       throw publicError("delivery_failed", 502);
     }
     return token;
@@ -224,12 +230,28 @@ export function createAccountEmailHandler({
     });
   }
 
+  async function markTokenTerminal(token, currentTime, requestId) {
+    try {
+      const marked = await store.markTokenUsed({
+        tokenId: token.id,
+        usedAt: currentTime.toISOString(),
+      });
+      if (!marked) throw new Error("token termination CAS missed");
+      return true;
+    } catch {
+      logCompensationFailure(requestId);
+      throw publicError("storage_unavailable", 503);
+    }
+  }
+
   async function restoreConsumedToken(token, requestId) {
     try {
-      await store.restoreConsumedToken({
+      const restored = await store.restoreConsumedToken({
         tokenId: token.id,
         consumedAttemptCount: token.attemptCount,
+        consumedUsedAt: token.usedAt,
       });
+      if (!restored) throw new Error("token restore CAS missed");
     } catch {
       logCompensationFailure(requestId);
       throw publicError("storage_unavailable", 503);
@@ -239,32 +261,14 @@ export function createAccountEmailHandler({
   async function compensateOldConfirmation(
     oldToken,
     newToken,
+    newTokenTerminal,
     currentTime,
     requestId,
   ) {
-    let failed = false;
-    if (newToken) {
-      try {
-        await store.markTokenUsed({
-          tokenId: newToken.id,
-          usedAt: currentTime.toISOString(),
-        });
-      } catch {
-        failed = true;
-      }
+    if (newToken && !newTokenTerminal) {
+      await markTokenTerminal(newToken, currentTime, requestId);
     }
-    try {
-      await store.restoreConsumedToken({
-        tokenId: oldToken.id,
-        consumedAttemptCount: oldToken.attemptCount,
-      });
-    } catch {
-      failed = true;
-    }
-    if (failed) {
-      logCompensationFailure(requestId);
-      throw publicError("storage_unavailable", 503);
-    }
+    await restoreConsumedToken(oldToken, requestId);
   }
 
   async function verifyCaptcha(token, requestId) {
@@ -415,6 +419,8 @@ export function createAccountEmailHandler({
       throw publicError("invalid_code", 400);
     }
     let nextToken = null;
+    let nextTokenTerminal = false;
+    let nextTokenTerminationFailed = false;
     try {
       if (await store.isEmailOwnedByAnother({
         emailNormalized: token.nextEmailNormalized,
@@ -439,8 +445,16 @@ export function createAccountEmailHandler({
         code: createCode(),
         requestId,
         currentTime,
-      }, (insertedToken) => {
-        nextToken = insertedToken;
+      }, {
+        onTokenInserted(insertedToken) {
+          nextToken = insertedToken;
+        },
+        onTokenTerminated() {
+          nextTokenTerminal = true;
+        },
+        onTokenTerminationFailed() {
+          nextTokenTerminationFailed = true;
+        },
       });
       return stateResponse(
         "changing",
@@ -448,9 +462,11 @@ export function createAccountEmailHandler({
         nextSendAt(nextToken.createdAt ?? currentTime.toISOString()),
       );
     } catch (error) {
+      if (nextTokenTerminationFailed) throw error;
       await compensateOldConfirmation(
         token,
         nextToken,
+        nextTokenTerminal,
         currentTime,
         requestId,
       );

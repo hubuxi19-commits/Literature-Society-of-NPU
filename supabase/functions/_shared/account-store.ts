@@ -157,12 +157,15 @@ export function createAccountStore(client: SupabaseClientLike) {
       tokenId: string;
       usedAt: string;
     }) {
-      const { error } = await client
+      const { data, error } = await client
         .from("account_action_tokens")
         .update({ used_at: usedAt })
         .eq("id", tokenId)
-        .is("used_at", null);
+        .is("used_at", null)
+        .select("id")
+        .maybeSingle();
       if (error) throwStoreError(error);
+      return data !== null;
     },
 
     async consumeToken({ tokenDigest, purpose, userId, maxAttempts }: {
@@ -185,15 +188,18 @@ export function createAccountStore(client: SupabaseClientLike) {
     },
 
 
-    async restoreConsumedToken({ tokenId, consumedAttemptCount }: {
+    async restoreConsumedToken({ tokenId, consumedAttemptCount, consumedUsedAt }: {
       tokenId: string;
       consumedAttemptCount: number;
+      consumedUsedAt: string;
     }) {
       if (
         typeof tokenId !== "string" ||
         tokenId.trim() === "" ||
         !Number.isInteger(consumedAttemptCount) ||
-        consumedAttemptCount < 1
+        consumedAttemptCount < 1 ||
+        typeof consumedUsedAt !== "string" ||
+        consumedUsedAt.trim() === ""
       ) throw new AccountStoreError("storage_unavailable");
       const { data, error } = await client
         .from("account_action_tokens")
@@ -202,11 +208,12 @@ export function createAccountStore(client: SupabaseClientLike) {
           attempt_count: consumedAttemptCount - 1,
         })
         .eq("id", tokenId)
-        .not("used_at", "is", null)
+        .eq("used_at", consumedUsedAt)
         .eq("attempt_count", consumedAttemptCount)
         .select("id")
         .maybeSingle();
-      if (error || !data) throwStoreError(error);
+      if (error) throwStoreError(error);
+      return data !== null;
     },
     async upsertRecoveryEmail({ userId, emailNormalized, verifiedAt }: {
       userId: string;
