@@ -74,8 +74,8 @@
 
 - `BREVO_API_KEY`：Brevo 事务邮件 API 密钥。
 - `TURNSTILE_SECRET_KEY`：Cloudflare Turnstile 服务端校验密钥。
-- `TOKEN_PEPPER`：验证码令牌 HMAC 的静态胡椒。
-- `RATE_LIMIT_PEPPER`：速率限制桶名 HMAC 的静态胡椒。
+- `ACCOUNT_TOKEN_PEPPER`：验证码令牌 HMAC 的静态胡椒。
+- `AUTH_RATE_LIMIT_PEPPER`：速率限制桶名 HMAC 的静态胡椒。
 
 `supabase/functions/.env.example` 只保留占位名和空值，用于提示需要的变量名；真实值不得进入该文件或任何入库文件。
 

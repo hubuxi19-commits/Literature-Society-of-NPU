@@ -279,11 +279,13 @@ test("安全文档列出全部账号秘密并明确分级上线与批量上限",
   for (const name of [
     "BREVO_API_KEY",
     "TURNSTILE_SECRET_KEY",
-    "TOKEN_PEPPER",
-    "RATE_LIMIT_PEPPER",
+    "ACCOUNT_TOKEN_PEPPER",
+    "AUTH_RATE_LIMIT_PEPPER",
   ]) {
     assert.match(security, new RegExp(name));
   }
+  assert.doesNotMatch(security, /(?<![A-Z_])TOKEN_PEPPER/);
+  assert.doesNotMatch(security, /(?<![A-Z_])RATE_LIMIT_PEPPER/);
   assert.match(security, /off.*warn.*enforce/s);
   assert.match(security, /每天最多 200/);
 });
@@ -299,16 +301,16 @@ test("边缘函数环境示例只含秘密占位符且不留真实值", async ()
     "BREVO_SENDER_NAME",
     "BREVO_API_KEY",
     "TURNSTILE_SECRET_KEY",
-    "TOKEN_PEPPER",
-    "RATE_LIMIT_PEPPER",
+    "ACCOUNT_TOKEN_PEPPER",
+    "AUTH_RATE_LIMIT_PEPPER",
   ]) {
     assert.match(envExample, new RegExp(`^${name}=`, "m"), `缺少 ${name} 占位`);
   }
   for (const name of [
     "BREVO_API_KEY",
     "TURNSTILE_SECRET_KEY",
-    "TOKEN_PEPPER",
-    "RATE_LIMIT_PEPPER",
+    "ACCOUNT_TOKEN_PEPPER",
+    "AUTH_RATE_LIMIT_PEPPER",
   ]) {
     assert.match(
       envExample,
@@ -316,4 +318,6 @@ test("边缘函数环境示例只含秘密占位符且不留真实值", async ()
       `${name} 示例不允许填入真实值`,
     );
   }
+  assert.doesNotMatch(envExample, /(?<![A-Z_])TOKEN_PEPPER/);
+  assert.doesNotMatch(envExample, /(?<![A-Z_])RATE_LIMIT_PEPPER/);
 });
