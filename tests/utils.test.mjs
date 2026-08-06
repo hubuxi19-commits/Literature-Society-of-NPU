@@ -4,6 +4,7 @@ import {
   validateStudentNumber,
   validatePassword,
   studentNumberToAuthEmail,
+  maskEmail,
   formatDate,
   formatDateTime,
   getPenNameChangeAvailability,
@@ -59,6 +60,15 @@ test("密码必须同时包含字母和数字且不少于八位", () => {
   assert.equal(validatePassword("12345678"), false);
   assert.equal(validatePassword("password"), false);
   assert.equal(validatePassword("wen8"), false);
+});
+
+test("邮箱遮罩与账号安全边界保持一致", () => {
+  assert.equal(maskEmail("reader@example.com"), "r***r@e***e.com");
+  assert.equal(maskEmail("a@example.com"), "***@e***e.com");
+  assert.equal(maskEmail("ab@x.com"), "***@***.com");
+  assert.equal(maskEmail(" Reader@Example.COM "), "r***r@e***e.com");
+  assert.throws(() => maskEmail("not-an-email"), /邮箱格式/);
+  assert.throws(() => maskEmail("a@b@c.com"), /邮箱格式/);
 });
 
 test("日期格式稳定且空值显示未记录", () => {

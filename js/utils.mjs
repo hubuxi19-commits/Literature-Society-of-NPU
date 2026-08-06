@@ -35,6 +35,24 @@ export function studentNumberToAuthEmail(value) {
   return `${studentNumber}@${AUTH_EMAIL_DOMAIN}`;
 }
 
+function maskPart(value) {
+  if (value.length <= 2) return "***";
+  return `${value[0]}***${value.at(-1)}`;
+}
+
+export function maskEmail(value) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  const atIndex = normalized.indexOf("@");
+  if (atIndex <= 0 || atIndex !== normalized.lastIndexOf("@")) {
+    throw new Error("找回邮箱格式不正确");
+  }
+  const domain = normalized.slice(atIndex + 1);
+  const labels = domain.split(".");
+  const topLevelDomain = labels.pop();
+  const maskedDomain = labels.map(maskPart).join(".");
+  return `${maskPart(normalized.slice(0, atIndex))}@${maskedDomain}.${topLevelDomain}`;
+}
+
 export function formatDate(value) {
   if (!value) return "未记录";
   const date = new Date(value);

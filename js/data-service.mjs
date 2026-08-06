@@ -2,6 +2,7 @@ import { demoSeed } from "./demo-data.mjs";
 import {
   createExcerpt,
   getPenNameChangeAvailability,
+  maskEmail,
   PUBLISHABLE_CATEGORIES,
   studentNumberToAuthEmail,
   validatePassword,
@@ -10,6 +11,10 @@ import {
 
 const SUPABASE_MODULE_URL =
   "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
+const DEMO_SECURITY_CODE = "123456";
+const FIXED_RECOVERY_REQUEST_MESSAGE =
+  "如果账号存在且已绑定邮箱，我们已发送验证码。";
+const PASSWORD_UPDATED_MESSAGE = "密码已更新，请使用新密码登录。";
 
 function clone(value) {
   return structuredClone(value);
@@ -58,6 +63,61 @@ function createDemoService(config = {}) {
 
   const isAdmin = () => session?.profile?.role === "admin";
 
+  const getSecurityView = (profileId) => {
+    const security = state.accountSecurityByUserId[profileId];
+    if (!security) {
+      return { state: "unbound", maskedEmail: null, nextSendAt: null };
+    }
+    return {
+      state: security.state,
+      maskedEmail: security.emailNormalized
+        ? maskEmail(security.emailNormalized)
+        : null,
+      nextSendAt: security.nextSendAt ?? null,
+    };
+  };
+
+  const requireVerifiedSession = () => {
+    const current = requireSession();
+    const security = state.accountSecurityByUserId[current.profile.id];
+    if (
+      !security ||
+      (security.state !== "verified" && security.state !== "changing")
+    ) {
+      throw new Error("请先验证找回邮箱");
+    }
+    return current;
+  };
+
+  const makeSession = (profile) => ({
+    user: { id: profile.id },
+    profile: clone(profile),
+    accountSecurity: getSecurityView(profile.id),
+  });
+
+  const normalizeRecoveryEmailInput = (value) => {
+    const normalized = String(value ?? "").trim().toLowerCase();
+    const atIndex = normalized.indexOf("@");
+    if (
+      atIndex <= 0 ||
+      atIndex !== normalized.lastIndexOf("@") ||
+      normalized.slice(atIndex + 1).length < 3
+    ) {
+      throw new Error("找回邮箱格式不正确");
+    }
+    return normalized;
+  };
+
+  const beginBinding = (profileId, email, captchaToken) => {
+    if (!String(captchaToken ?? "").trim()) throw new Error("请完成人机验证");
+    const emailNormalized = normalizeRecoveryEmailInput(email);
+    state.accountSecurityByUserId[profileId] = {
+      state: "pending",
+      emailNormalized,
+      nextSendAt: new Date(now().getTime() + 60_000).toISOString(),
+    };
+  };
+
   const enrichComment = (comment) => {
     const profile = getProfileRecord(comment.user_id);
     return {
@@ -103,14 +163,11 @@ function createDemoService(config = {}) {
       );
       if (!account) throw new Error("学号或密码不正确");
       const profile = getProfileRecord(account.profileId);
-      session = {
-        user: { id: profile.id },
-        profile: clone(profile),
-      };
+      session = makeSession(profile);
       return clone(session);
     },
 
-    async signUp({ studentNumber, password, penName }) {
+    async signUp({ studentNumber, password, penName, recoveryEmail, captchaToken }) {
       const normalizedNumber = String(studentNumber ?? "").trim();
       if (!validateStudentNumber(normalizedNumber)) {
         throw new Error("学号格式不正确");
@@ -141,10 +198,11 @@ function createDemoService(config = {}) {
         password: String(password),
         profileId: profile.id,
       });
-      session = {
-        user: { id: profile.id },
-        profile: clone(profile),
-      };
+      session = makeSession(profile);
+      if (recoveryEmail) {
+        beginBinding(profile.id, recoveryEmail, captchaToken);
+        session = makeSession(profile);
+      }
       return clone(session);
     },
 
@@ -181,7 +239,7 @@ function createDemoService(config = {}) {
     },
 
     async createWork(input) {
-      const current = requireSession();
+      const current = requireVerifiedSession();
       const now = new Date().toISOString();
       const content = requireText(input.content, "正文", 50000);
       const work = {
@@ -202,7 +260,7 @@ function createDemoService(config = {}) {
     },
 
     async deleteWork(workId) {
-      const current = requireSession();
+      const current = requireVerifiedSession();
       const index = state.works.findIndex((work) => work.id === workId);
       if (index < 0) throw new Error("作品不存在");
       const work = state.works[index];
@@ -217,7 +275,7 @@ function createDemoService(config = {}) {
     },
 
     async toggleLike(workId) {
-      const current = requireSession();
+      const current = requireVerifiedSession();
       if (!state.works.some((work) => work.id === workId)) {
         throw new Error("作品不存在");
       }
@@ -244,7 +302,7 @@ function createDemoService(config = {}) {
     },
 
     async addComment(workId, content, parentId = null) {
-      const current = requireSession();
+      const current = requireVerifiedSession();
       if (!state.works.some((work) => work.id === workId)) {
         throw new Error("作品不存在");
       }
@@ -272,7 +330,7 @@ function createDemoService(config = {}) {
     },
 
     async deleteComment(commentId) {
-      const current = requireSession();
+      const current = requireVerifiedSession();
       const comment = state.comments.find((item) => item.id === commentId);
       if (!comment) throw new Error("评论不存在");
       if (comment.user_id !== current.profile.id && !isAdmin()) {
@@ -308,7 +366,7 @@ function createDemoService(config = {}) {
     },
 
     async updateProfile(profileId, input) {
-      const current = requireSession();
+      const current = requireVerifiedSession();
       if (current.profile.id !== profileId) {
         throw new Error("没有权限修改该资料");
       }
@@ -340,13 +398,126 @@ function createDemoService(config = {}) {
     },
 
     async setFeatured(workId, featured) {
-      requireSession();
+      requireVerifiedSession();
       if (!isAdmin()) throw new Error("只有管理员可以设置编辑推荐");
       const work = state.works.find((item) => item.id === workId);
       if (!work) throw new Error("作品不存在");
       work.is_featured = Boolean(featured);
       work.updated_at = new Date().toISOString();
       return { id: work.id, is_featured: work.is_featured };
+    },
+
+    async getAccountSecurityStatus() {
+      const current = requireSession();
+      return getSecurityView(current.profile.id);
+    },
+
+    async requestRecoveryEmail(email, captchaToken) {
+      const current = requireSession();
+      const security = state.accountSecurityByUserId[current.profile.id];
+      if (security?.state === "verified") throw new Error("该找回邮箱已经验证");
+      beginBinding(current.profile.id, email, captchaToken);
+      return { ok: true, message: FIXED_RECOVERY_REQUEST_MESSAGE };
+    },
+
+    async verifyRecoveryEmail(code) {
+      const current = requireSession();
+      const security = state.accountSecurityByUserId[current.profile.id];
+      if (!security || security.state !== "pending") {
+        throw new Error("请先申请验证码");
+      }
+      if (String(code ?? "").trim() !== DEMO_SECURITY_CODE) {
+        throw new Error("验证码不正确");
+      }
+      security.state = "verified";
+      security.nextSendAt = null;
+      return { maskedEmail: maskEmail(security.emailNormalized) };
+    },
+
+    async reauthenticate(currentPassword) {
+      const current = requireSession();
+      const account = state.accounts.find(
+        (item) => item.profileId === current.profile.id,
+      );
+      if (!account || account.password !== String(currentPassword)) {
+        throw new Error("当前密码不正确");
+      }
+      return true;
+    },
+
+    async requestRecoveryEmailChange(newEmail, captchaToken) {
+      const current = requireVerifiedSession();
+      if (!String(captchaToken ?? "").trim()) throw new Error("请完成人机验证");
+      const emailNormalized = normalizeRecoveryEmailInput(newEmail);
+      const security = state.accountSecurityByUserId[current.profile.id];
+      security.state = "changing";
+      security.nextEmailNormalized = emailNormalized;
+      security.nextSendAt = new Date(now().getTime() + 60_000).toISOString();
+      return { ok: true, message: "验证码已发送到当前邮箱，请查收并确认。" };
+    },
+
+    async confirmRecoveryEmailChangeOld(code) {
+      const current = requireVerifiedSession();
+      const security = state.accountSecurityByUserId[current.profile.id];
+      if (security.state !== "changing") throw new Error("请先发起邮箱变更");
+      if (String(code ?? "").trim() !== DEMO_SECURITY_CODE) {
+        throw new Error("验证码不正确");
+      }
+      security.oldConfirmed = true;
+      security.nextSendAt = new Date(now().getTime() + 60_000).toISOString();
+      return { ok: true, message: "验证成功，验证码已发送到新邮箱。" };
+    },
+
+    async confirmRecoveryEmailChangeNew(code) {
+      const current = requireVerifiedSession();
+      const security = state.accountSecurityByUserId[current.profile.id];
+      if (security.state !== "changing") throw new Error("请先发起邮箱变更");
+      if (!security.oldConfirmed) throw new Error("请先确认原邮箱");
+      if (String(code ?? "").trim() !== DEMO_SECURITY_CODE) {
+        throw new Error("验证码不正确");
+      }
+      security.state = "verified";
+      security.emailNormalized = security.nextEmailNormalized;
+      security.nextEmailNormalized = null;
+      security.oldConfirmed = false;
+      security.nextSendAt = null;
+      return { maskedEmail: maskEmail(security.emailNormalized) };
+    },
+
+    async requestPasswordRecovery(studentNumber, captchaToken) {
+      if (!validateStudentNumber(studentNumber)) {
+        throw new Error("学号格式不正确");
+      }
+      if (!String(captchaToken ?? "").trim()) throw new Error("请完成人机验证");
+      return { ok: true, message: FIXED_RECOVERY_REQUEST_MESSAGE };
+    },
+
+    async completePasswordRecovery(studentNumber, code, newPassword, captchaToken) {
+      if (!validateStudentNumber(studentNumber)) {
+        throw new Error("学号格式不正确");
+      }
+      if (!validatePassword(newPassword)) {
+        throw new Error("密码至少八位，且需要同时包含字母和数字");
+      }
+      if (!String(captchaToken ?? "").trim()) throw new Error("请完成人机验证");
+      if (String(code ?? "").trim() !== DEMO_SECURITY_CODE) {
+        throw new Error("验证码不正确");
+      }
+      const account = state.accounts.find(
+        (item) => item.studentNumber === String(studentNumber ?? "").trim(),
+      );
+      if (!account) throw new Error("验证码不正确");
+      account.password = String(newPassword);
+      return { ok: true, message: PASSWORD_UPDATED_MESSAGE };
+    },
+
+    canWrite() {
+      if (!session) return false;
+      const security = state.accountSecurityByUserId[session.profile.id];
+      return Boolean(
+        security &&
+          (security.state === "verified" || security.state === "changing"),
+      );
     },
   };
 
@@ -358,12 +529,20 @@ function createSupabaseService(config) {
   let cachedSession = null;
 
   const getClient = async () => {
+    if (config.clientOverride) return config.clientOverride;
     if (!clientPromise) {
       clientPromise = import(SUPABASE_MODULE_URL).then(({ createClient }) =>
         createClient(config.supabaseUrl, config.supabasePublishableKey ?? config.supabaseAnonKey),
       );
     }
     return clientPromise;
+  };
+
+  const invokeFunction = async (name, body) => {
+    const client = await getClient();
+    const { data, error } = await client.functions.invoke(name, { body });
+    if (error) throw new Error(data?.message || error.message);
+    return data;
   };
 
   const getCurrentProfile = async (client, userId) => {
@@ -374,6 +553,27 @@ function createSupabaseService(config) {
       .single();
     if (error) throw new Error(error.message);
     return data;
+  };
+
+  const buildCachedSession = async (client, user) => {
+    let accountSecurity = null;
+    try {
+      const status = await invokeFunction("account-email", {
+        action: "status",
+      });
+      accountSecurity = {
+        state: status?.state ?? "unbound",
+        maskedEmail: status?.maskedEmail ?? null,
+        nextSendAt: status?.nextSendAt ?? null,
+      };
+    } catch {
+      accountSecurity = null;
+    }
+    return {
+      user,
+      profile: await getCurrentProfile(client, user.id),
+      accountSecurity,
+    };
   };
 
   const requireRemoteSession = async () => {
@@ -426,10 +626,7 @@ function createSupabaseService(config) {
         return null;
       }
       if (!cachedSession || cachedSession.user.id !== user.id) {
-        cachedSession = {
-          user,
-          profile: await getCurrentProfile(client, user.id),
-        };
+        cachedSession = await buildCachedSession(client, user);
       }
       return clone(cachedSession);
     },
@@ -441,14 +638,11 @@ function createSupabaseService(config) {
         password,
       });
       if (error) throw new Error(error.message);
-      cachedSession = {
-        user: data.user,
-        profile: await getCurrentProfile(client, data.user.id),
-      };
+      cachedSession = await buildCachedSession(client, data.user);
       return clone(cachedSession);
     },
 
-    async signUp({ studentNumber, password, penName }) {
+    async signUp({ studentNumber, password, penName, recoveryEmail, captchaToken }) {
       if (!validatePassword(password)) {
         throw new Error("密码至少八位，且需要同时包含字母和数字");
       }
@@ -462,11 +656,27 @@ function createSupabaseService(config) {
       if (!data.session) {
         throw new Error("注册已提交，请先在 Supabase 关闭邮件确认后再登录");
       }
-      cachedSession = {
-        user: data.user,
-        profile: await getCurrentProfile(client, data.user.id),
-      };
-      return clone(cachedSession);
+      cachedSession = await buildCachedSession(client, data.user);
+      let deliveryWarning = null;
+      if (recoveryEmail) {
+        try {
+          const bindResult = await invokeFunction("account-email", {
+            action: "request-bind",
+            email: recoveryEmail,
+            captchaToken,
+          });
+          cachedSession.accountSecurity = {
+            state: "pending",
+            maskedEmail: bindResult?.maskedEmail ?? null,
+            nextSendAt: bindResult?.nextSendAt ?? null,
+          };
+        } catch {
+          deliveryWarning = "验证码邮件暂时无法送达，稍后可在账号安全中重新发送";
+        }
+      }
+      const result = clone(cachedSession);
+      if (deliveryWarning) result.deliveryWarning = deliveryWarning;
+      return result;
     },
 
     async signOut() {
@@ -678,6 +888,84 @@ function createSupabaseService(config) {
         id: data?.id ?? workId,
         is_featured: data?.is_featured ?? Boolean(featured),
       };
+    },
+
+    async getAccountSecurityStatus() {
+      const current = await requireRemoteSession();
+      return invokeFunction("account-email", { action: "status" });
+    },
+
+    async requestRecoveryEmail(email, captchaToken) {
+      await requireRemoteSession();
+      return invokeFunction("account-email", {
+        action: "request-bind",
+        email,
+        captchaToken,
+      });
+    },
+
+    async verifyRecoveryEmail(code) {
+      await requireRemoteSession();
+      return invokeFunction("account-email", { action: "verify-bind", code });
+    },
+
+    async reauthenticate(currentPassword) {
+      const client = await getClient();
+      if (!cachedSession?.user?.email) throw new Error("请先登录");
+      const { data, error } = await client.auth.signInWithPassword({
+        email: cachedSession.user.email,
+        password: currentPassword,
+      });
+      if (error) throw new Error(error.message);
+      cachedSession = await buildCachedSession(client, data.user);
+      return true;
+    },
+
+    async requestRecoveryEmailChange(newEmail, captchaToken) {
+      await requireRemoteSession();
+      return invokeFunction("account-email", {
+        action: "request-change",
+        email: newEmail,
+        captchaToken,
+      });
+    },
+
+    async confirmRecoveryEmailChangeOld(code) {
+      await requireRemoteSession();
+      return invokeFunction("account-email", {
+        action: "confirm-change-old",
+        code,
+      });
+    },
+
+    async confirmRecoveryEmailChangeNew(code) {
+      await requireRemoteSession();
+      return invokeFunction("account-email", {
+        action: "confirm-change-new",
+        code,
+      });
+    },
+
+    async requestPasswordRecovery(studentNumber, captchaToken) {
+      return invokeFunction("password-recovery", {
+        action: "request",
+        studentNumber,
+        captchaToken,
+      });
+    },
+
+    async completePasswordRecovery(studentNumber, code, newPassword, captchaToken) {
+      return invokeFunction("password-recovery", {
+        action: "complete",
+        studentNumber,
+        code,
+        newPassword,
+        captchaToken,
+      });
+    },
+
+    canWrite() {
+      return cachedSession?.accountSecurity?.state === "verified";
     },
   };
 

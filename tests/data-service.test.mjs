@@ -200,3 +200,301 @@ test("未登录用户不能执行写操作", async () => {
     /请先登录/,
   );
 });
+
+test("新账号未验证邮箱时可登录阅读但不能写入", async () => {
+  const service = createDataService({ mode: "demo" });
+  const session = await service.signUp({
+    studentNumber: "2024555555",
+    password: "newmember88",
+    penName: "远岫",
+    recoveryEmail: "reader@example.com",
+    captchaToken: "test-token",
+  });
+  assert.equal(session.accountSecurity.state, "pending");
+  assert.equal("accountSecurity" in session.profile, false);
+  assert.ok((await service.listWorks()).length > 0);
+  assert.equal(service.canWrite(), false);
+  await assert.rejects(() => service.createWork({
+    title: "未验证",
+    excerpt: "",
+    content: "正文",
+    category: "新诗",
+  }), /验证找回邮箱/);
+  await assert.rejects(() => service.setFeatured("work-river", true), /验证找回邮箱/);
+  await service.verifyRecoveryEmail("123456");
+  assert.equal(service.canWrite(), true);
+  const work = await service.createWork({
+    title: "已验证",
+    excerpt: "",
+    content: "正文",
+    category: "新诗",
+  });
+  assert.equal(work.title, "已验证");
+});
+
+test("密码找回对存在与不存在账号返回相同文案", async () => {
+  const service = createDataService({ mode: "demo" });
+  const known = await service.requestPasswordRecovery("2023123456", "test-token");
+  const missing = await service.requestPasswordRecovery("2099999999", "test-token");
+  assert.equal(known.message, missing.message);
+  assert.equal(known.message, "如果账号存在且已绑定邮箱，我们已发送验证码。");
+});
+
+test("密码找回完成后可用新密码登录并拒绝错误验证码", async () => {
+  const service = createDataService({ mode: "demo" });
+  await assert.rejects(
+    () => service.completePasswordRecovery("2023123456", "000000", "newpass88", "test-token"),
+    /验证码不正确/,
+  );
+  await assert.rejects(
+    () => service.completePasswordRecovery("2023123456", "123456", "weak", "test-token"),
+    /密码至少八位/,
+  );
+  const result = await service.completePasswordRecovery(
+    "2023123456",
+    "123456",
+    "newpass88",
+    "test-token",
+  );
+  assert.equal(result.message, "密码已更新，请使用新密码登录。");
+  await service.signOut();
+  const session = await service.signIn({
+    studentNumber: "2023123456",
+    password: "newpass88",
+  });
+  assert.equal(session.profile.pen_name, "松声");
+});
+
+test("演示账号可申请绑定找回邮箱并通过固定验证码验证", async () => {
+  const service = createDataService({ mode: "demo" });
+  const session = await service.signUp({
+    studentNumber: "2024666666",
+    password: "newmember88",
+    penName: "远帆",
+  });
+  assert.equal(session.accountSecurity.state, "unbound");
+  assert.equal(service.canWrite(), false);
+  await service.requestRecoveryEmail("sailor@example.com", "test-token");
+  assert.equal((await service.getAccountSecurityStatus()).state, "pending");
+  assert.equal(
+    (await service.getAccountSecurityStatus()).maskedEmail,
+    "s***r@e***e.com",
+  );
+  await assert.rejects(() => service.verifyRecoveryEmail("000000"), /验证码不正确/);
+  await service.verifyRecoveryEmail("123456");
+  assert.equal(service.canWrite(), true);
+});
+
+test("演示账号完成找回邮箱变更并更新遮罩邮箱", async () => {
+  const service = createDataService({ mode: "demo" });
+  await service.signIn({ studentNumber: "2023123456", password: "wenyuan88" });
+  const before = await service.getAccountSecurityStatus();
+  assert.equal(before.state, "verified");
+  await service.requestRecoveryEmailChange("newreader@example.com", "test-token");
+  assert.equal((await service.getAccountSecurityStatus()).state, "changing");
+  await assert.rejects(
+    () => service.confirmRecoveryEmailChangeNew("123456"),
+    /先确认原邮箱|发起邮箱变更/,
+  );
+  await service.confirmRecoveryEmailChangeOld("123456");
+  await service.confirmRecoveryEmailChangeNew("123456");
+  const after = await service.getAccountSecurityStatus();
+  assert.equal(after.state, "verified");
+  assert.equal(after.maskedEmail, "n***r@e***e.com");
+});
+
+test("演示重认证校验当前密码并拒绝错误密码", async () => {
+  const service = createDataService({ mode: "demo" });
+  await service.signIn({ studentNumber: "2023123456", password: "wenyuan88" });
+  assert.equal(await service.reauthenticate("wenyuan88"), true);
+  await assert.rejects(() => service.reauthenticate("wrong88"), /当前密码不正确/);
+});
+
+test("已有演示账号默认为已验证状态且会话包含独立账号安全", async () => {
+  const service = createDataService({ mode: "demo" });
+  await service.signIn({ studentNumber: "2023123456", password: "wenyuan88" });
+  const session = await service.getSession();
+  assert.equal(session.accountSecurity.state, "verified");
+  assert.equal(service.canWrite(), true);
+  assert.deepEqual(Object.keys(session).sort(), [
+    "accountSecurity",
+    "profile",
+    "user",
+  ]);
+  assert.equal("accountSecurity" in session.profile, false);
+});
+
+test("Supabase 服务缓存账号安全状态并按函数名转发动作", async () => {
+  const invoked = [];
+  const fakeClient = {
+    auth: {
+      getSession: async () => ({
+        data: {
+          session: {
+            user: {
+              id: "user-1",
+              email: "2023123456@accounts.wenyuan.invalid",
+            },
+          },
+        },
+        error: null,
+      }),
+    },
+    from: () => ({
+      select: () => ({
+        eq: () => ({
+          single: async () => ({
+            data: {
+              id: "user-1",
+              pen_name: "松声",
+              bio: "",
+              role: "member",
+            },
+            error: null,
+          }),
+        }),
+      }),
+    }),
+    functions: {
+      invoke: async (name, { body }) => {
+        invoked.push([name, body]);
+        if (name === "account-email" && body.action === "status") {
+          return {
+            data: {
+              state: "verified",
+              maskedEmail: "s***g@e***e.com",
+              nextSendAt: null,
+            },
+            error: null,
+          };
+        }
+        if (name === "password-recovery" && body.action === "request") {
+          return {
+            data: { ok: true, message: "如果账号存在且已绑定邮箱，我们已发送验证码。" },
+            error: null,
+          };
+        }
+        return { data: {}, error: null };
+      },
+    },
+  };
+  const service = createDataService({
+    mode: "supabase",
+    supabaseUrl: "https://project.supabase.co",
+    supabasePublishableKey: "sb_publishable_test",
+    clientOverride: fakeClient,
+  });
+  const session = await service.getSession();
+  assert.equal(session.profile.pen_name, "松声");
+  assert.equal(session.accountSecurity.state, "verified");
+  assert.equal(session.accountSecurity.maskedEmail, "s***g@e***e.com");
+  assert.equal("accountSecurity" in session.profile, false);
+  assert.equal(service.canWrite(), true);
+  assert.deepEqual(invoked.at(-1), ["account-email", { action: "status" }]);
+
+  const recovery = await service.requestPasswordRecovery("2023123456", "t");
+  assert.equal(
+    recovery.message,
+    "如果账号存在且已绑定邮箱，我们已发送验证码。",
+  );
+  assert.deepEqual(invoked.at(-1), [
+    "password-recovery",
+    { action: "request", studentNumber: "2023123456", captchaToken: "t" },
+  ]);
+
+  await service.completePasswordRecovery(
+    "2023123456",
+    "123456",
+    "newpass88",
+    "t",
+  );
+  assert.deepEqual(invoked.at(-1), [
+    "password-recovery",
+    {
+      action: "complete",
+      studentNumber: "2023123456",
+      code: "123456",
+      newPassword: "newpass88",
+      captchaToken: "t",
+    },
+  ]);
+});
+
+test("Supabase 注册绑定失败返回 deliveryWarning 且重认证复用会话邮箱", async () => {
+  const invoked = [];
+  const fakeClient = {
+    auth: {
+      signUp: async () => {
+        const user = {
+          id: "user-1",
+          email: "2024777777@accounts.wenyuan.invalid",
+        };
+        return { data: { user, session: { user } }, error: null };
+      },
+      signInWithPassword: async ({ email, password }) => {
+        invoked.push(["sign-in", email, password]);
+        return { data: { user: { id: "user-1", email } }, error: null };
+      },
+    },
+    from: () => ({
+      select: () => ({
+        eq: () => ({
+          single: async () => ({
+            data: {
+              id: "user-1",
+              pen_name: "远岫",
+              bio: "",
+              role: "member",
+            },
+            error: null,
+          }),
+        }),
+      }),
+    }),
+    functions: {
+      invoke: async (name, { body }) => {
+        invoked.push([name, body]);
+        if (name === "account-email" && body.action === "status") {
+          return {
+            data: { state: "unbound", maskedEmail: null, nextSendAt: null },
+            error: null,
+          };
+        }
+        if (name === "account-email" && body.action === "request-bind") {
+          return { data: null, error: { message: "验证码邮件发送失败" } };
+        }
+        return { data: {}, error: null };
+      },
+    },
+  };
+  const service = createDataService({
+    mode: "supabase",
+    supabaseUrl: "https://project.supabase.co",
+    supabasePublishableKey: "sb_publishable_test",
+    clientOverride: fakeClient,
+  });
+  const session = await service.signUp({
+    studentNumber: "2024777777",
+    password: "newmember88",
+    penName: "远岫",
+    recoveryEmail: "reader@example.com",
+    captchaToken: "t",
+  });
+  assert.equal(session.accountSecurity.state, "unbound");
+  assert.equal(
+    session.deliveryWarning,
+    "验证码邮件暂时无法送达，稍后可在账号安全中重新发送",
+  );
+  assert.deepEqual(invoked.at(-1), [
+    "account-email",
+    { action: "request-bind", email: "reader@example.com", captchaToken: "t" },
+  ]);
+
+  const authenticated = await service.reauthenticate("newmember88");
+  assert.equal(authenticated, true);
+  assert.deepEqual(invoked.find(([name]) => name === "sign-in"), [
+    "sign-in",
+    "2024777777@accounts.wenyuan.invalid",
+    "newmember88",
+  ]);
+});

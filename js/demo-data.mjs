@@ -190,6 +190,33 @@ export const demoSeed = {
       updated_at: "2026-07-27T09:05:00+08:00",
     },
   ],
+  accountSecurityByUserId: {
+    "profile-pine": {
+      state: "verified",
+      emailNormalized: "song@example.com",
+      nextSendAt: null,
+    },
+    "profile-editor": {
+      state: "verified",
+      emailNormalized: "editor@example.com",
+      nextSendAt: null,
+    },
+    "profile-dew": {
+      state: "verified",
+      emailNormalized: "dew@example.com",
+      nextSendAt: null,
+    },
+    "profile-apricot": {
+      state: "verified",
+      emailNormalized: "apricot@example.com",
+      nextSendAt: null,
+    },
+    "profile-wild": {
+      state: "verified",
+      emailNormalized: "wild@example.com",
+      nextSendAt: null,
+    },
+  },
   siteSettings: {
     editor_note: {
       title: "把写下的交给彼此",
