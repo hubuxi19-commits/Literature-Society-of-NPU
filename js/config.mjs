@@ -5,7 +5,7 @@ const productionConfig = Object.freeze({
   environment: "production",
   supabaseUrl: "https://odfjxtzgekhiaktzaxas.supabase.co",
   supabasePublishableKey: "sb_publishable_JGnMQuwRNV6pTIzUORyqSg_PB-zGT0-",
-  turnstileSiteKey: "",
+  turnstileSiteKey: "0x4AAAAAAEH7aHbJJOgShIHC",
 });
 
 export const config = await loadConfig({
