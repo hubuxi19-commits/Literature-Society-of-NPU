@@ -225,7 +225,7 @@ test("README 只保留当前功能分支的权威快进发布顺序", async () =
   assert.doesNotMatch(readme, /codex\/literature-community-redesign/);
   assert.doesNotMatch(readme, /--no-ff/);
   assert.equal(
-    (readme.match(/git merge --ff-only codex\/mobile-feed-export/g) ?? []).length,
+    (readme.match(/git merge --ff-only codex\/wenyuan-community-upgrade/g) ?? []).length,
     1,
   );
 });

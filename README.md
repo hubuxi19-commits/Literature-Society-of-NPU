@@ -214,14 +214,15 @@ order by tablename, policyname;
 
 如果某个写操作在隐藏按钮后仍可通过浏览器控制台直接执行，且数据库没有拒绝，请不要上线。
 
-### 6. 升级已有项目：迁移分类和每周笔名修改
+### 6. 升级已有项目：迁移分类、每周笔名修改与账号安全
 
-新建项目直接执行最新的 `supabase/schema.sql` 即可。已有项目必须在发布本次前端前，在同一个 Supabase 项目的 SQL Editor 中按以下顺序操作；本仓库**不表示该迁移已在任何生产项目执行**。
+新建项目直接执行最新的 `supabase/schema.sql` 即可。已有项目必须在发布本次前端前，在同一个 Supabase 项目的 SQL Editor 中按以下顺序操作；本仓库**不表示这些迁移已在任何生产项目执行**。
 
 1. 先确认准备维护的 Supabase 项目正确，并为现有数据保留可恢复备份。
 2. 打开并完整执行 [`supabase/migrations/20260731_split_poetry_categories_and_lock_pen_name.sql`](./supabase/migrations/20260731_split_poetry_categories_and_lock_pen_name.sql)。该事务会把 `works.category = '诗歌'` 更新为 `新诗`，替换分类约束，并撤销普通登录用户直接更新 `profiles.pen_name` 的权限。
 3. 接着执行 [`supabase/migrations/20260802_allow_weekly_pen_name_changes.sql`](./supabase/migrations/20260802_allow_weekly_pen_name_changes.sql)。该事务会增加 `pen_name_changed_at`，并创建带行锁的 `update_own_profile` RPC。成员仍不能直接更新 `pen_name`，只能通过 RPC 每七天修改一次；简介不受冷却限制。
-4. 在同一 SQL Editor 中执行以下验证查询：
+4. 再执行 [`supabase/migrations/20260802_account_recovery_security.sql`](./supabase/migrations/20260802_account_recovery_security.sql)。该事务会创建找回邮箱、验证码令牌与限速三张私有表，把写入门禁与原子 RPC 挂到既有写策略上，并默认写入 `write_gate = 'off'`（不拦截任何写操作）。
+5. 在同一 SQL Editor 中执行以下验证查询：
 
 ```sql
 select category, count(*)
@@ -230,12 +231,13 @@ group by category
 order by category;
 ```
 
-5. 结果中不得出现 `诗歌`；只应出现 `新诗`、`旧诗`、`散文`、`小说`、`随笔`、`其他` 中实际有数据的分类。若仍出现 `诗歌` 或 SQL 执行报错，停止发布并先处理数据库问题。
-6. 仅在两项迁移和查询都通过后，继续下面的前端发布步骤。
+6. 结果中不得出现 `诗歌`；只应出现 `新诗`、`旧诗`、`散文`、`小说`、`随笔`、`其他` 中实际有数据的分类。若仍出现 `诗歌` 或 SQL 执行报错，停止发布并先处理数据库问题。
+7. 确认 `account_recovery_emails`、`account_action_tokens`、`auth_rate_limits` 三张表的 RLS 均为 `true`，并确认 `site_settings.account_security.write_gate` 为 `off`。
+8. 仅在三条迁移和查询都通过后，继续下面的前端发布步骤。
 
 迁移与前端发布应安排在同一维护窗口：新前端投稿允许“新诗”和“旧诗”，旧分类约束会拒绝这些投稿。前端保留旧“诗歌”显示为“新诗”的兼容映射，但这不是跳过数据库迁移的替代方案。
 
-账号安全与密码找回需要第三项迁移 `supabase/migrations/20260802_account_recovery_security.sql`、两个 Edge Function 及对应的 Edge 秘密。确切的部署顺序、上线状态分级（`off → warn → enforce`）、回滚 SQL 和密钥处理见 [SECURITY.md](./SECURITY.md) 的“账号安全与密码找回的密钥和部署”。在负责人确认 staging 全部通过前，不要把生产 `write_gate` 切到 `enforce`。
+账号安全上线还需在生产项目设置 Edge 秘密、部署 `account-email` 与 `password-recovery` 两个 Edge Function，并把 `write_gate` 按 `off → warn → enforce` 推进。确切的部署顺序、上线状态分级、回滚 SQL 和密钥处理见 [SECURITY.md](./SECURITY.md) 的“账号安全与密码找回的密钥和部署”。在负责人确认 staging 全部通过前，不要把生产 `write_gate` 切到 `enforce`。
 
 ### 7. 配置站点地址
 
@@ -311,19 +313,21 @@ npm test
 
 ## 发布本次改版
 
-仅在代码评审批准、上述 Supabase 迁移及验证查询已由负责人员在正确项目完成后，才从**主工作区（primary checkout）**发布。本节命令不得在链接工作树 `.worktrees/mobile-feed-export` 中执行；该工作树承载待集成的 `codex/mobile-feed-export` 功能分支。
+仅在代码评审批准、上述 Supabase 迁移及验证查询已由负责人员在正确项目完成后，才从**主工作区（primary checkout）**发布。`main` 当前在独立检出目录（`outputs/wenyuan-literature-community`）中维护，功能分支在 `codex/wenyuan-community-upgrade` 上开发；快进合并与推送须在持有 `main` 的那个检出中执行。
 
 在主工作区确认没有未提交改动后，将已经评审批准的功能分支以快进方式集成到将由 GitHub Pages 部署的 `main`，然后重新验证并推送：
 
 ```powershell
 git status
 git switch main
-git merge --ff-only codex/mobile-feed-export
+git merge --ff-only codex/wenyuan-community-upgrade
 git diff --check
 npm test
 git status
 git push origin main
 ```
+
+账号安全上线不止于前端与迁移：还必须在生产 Supabase 项目设置 Edge 秘密、部署 `account-email` 与 `password-recovery` 两个函数，并把 `write_gate` 逐级推进（详见 `SECURITY.md`）。前端上线本身不包含这些服务端步骤。
 
 `git merge --ff-only` 若不能快进会停止，不应以强制合并绕过它；先处理分支历史或按评审意见更新后再发布。测试或检查失败时不要推送。不要在迁移尚未确认时推送，也不要将 `service_role`、数据库密码或管理令牌带入提交。上述是未来的发布步骤，不表示合并、迁移或推送已经发生。
 
@@ -354,14 +358,14 @@ git push origin main
 
 - [ ] 确认旧版保存过明文登录凭据的表已停用，相关账户需要更换密码。
 - [ ] 在真实 Supabase 项目执行并复核 `schema.sql`。
-- [ ] 对已有项目依次执行 `20260731_split_poetry_categories_and_lock_pen_name.sql` 与 `20260802_allow_weekly_pen_name_changes.sql`，并确认分类查询不含 `诗歌`。
-- [ ] 确认五张业务表的 RLS 全部为 `true`。
-- [ ] 用未登录、普通成员和管理员三种身份进行越权测试。
-- [ ] 确认前端只有 URL 和 `anon` 密钥。
-- [ ] 为注册和登录启用 CAPTCHA、限速和异常尝试监控。
+- [x] 对已有项目依次执行 `20260731_split_poetry_categories_and_lock_pen_name.sql`、`20260802_allow_weekly_pen_name_changes.sql` 与 `20260802_account_recovery_security.sql`，并确认分类查询不含 `诗歌`。
+- [x] 确认五张业务表的 RLS 全部为 `true`。
+- [x] 用未登录、普通成员和管理员三种身份进行越权测试。
+- [x] 确认前端只有 URL 和 `anon` 密钥。
+- [x] 为注册和登录启用 CAPTCHA、限速和异常尝试监控。
 - [ ] 增加内容举报、管理员审计记录和社区处置流程。
 - [ ] 配置数据库备份和恢复演练。
-- [ ] 绑定并验证学校邮箱，提供安全的密码找回方式。
+- [x] 绑定并验证学校邮箱，提供安全的密码找回方式。
 - [ ] 如果必须继续“只输入学号登录”，使用 Supabase Edge Function 在服务端完成身份映射和学校身份校验。
 - [ ] 配置 Content Security Policy、Referrer Policy 和其他安全响应头；GitHub Pages 对自定义响应头支持有限，可考虑 Cloudflare 或其他静态托管层。
 - [ ] 制定隐私说明，明确公开资料、日志、内容保留与删除规则。

@@ -104,6 +104,8 @@
 
 生产保持 `off`，先部署 Schema 与函数。冒烟测试通过后切到 `warn`，让界面提示而不阻断数据库写入。以每天最多 200 个账户的批次开放绑定。只有抽样验证登录、发布、找回、重复邮箱、限速和隐私测试全部通过后，才可由负责人单独批准切到 `enforce`。
 
+生产项目 ref 为 `odfjxtzgekhiaktzaxas`，站点为 `https://hubuxi19-commits.github.io/Literature-Society-of-NPU/`。截至 2026-08-06，生产已完成：三条迁移、Edge 秘密（含生产 Turnstile widget sitekey `0x4AAAAAAEH7aHbJJOgShIHC`）、`account-email` 与 `password-recovery` 函数部署、前端合并 `main` 并由 GitHub Pages 发布；`write_gate` 已推进到 `warn`。切 `enforce` 的操作与回滚预案见 [`docs/production-enforce-stepup.md`](./docs/production-enforce-stepup.md)。
+
 回滚只需一条 SQL：
 
 ```sql
