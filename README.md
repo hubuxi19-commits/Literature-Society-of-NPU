@@ -21,6 +21,9 @@
 - 管理员删除内容和维护编辑推荐。
 - 桌面端、平板与移动端响应式布局；移动首页每次聚焦一张作品卡，左滑下一篇、右滑上一篇。
 - 阅读页本地生成 1080 × 1920 PNG 作品图片，可分页后明确选择分享或保存。
+- 找回邮箱的绑定、验证与更换，完整邮箱永不公开、不进入作者主页或作品。
+- 忘记密码时通过验证码找回；对已知与未知学号返回相同文案，避免枚举。
+- 未验证找回邮箱的账户在发布等写操作前被引导到账号安全页。
 - 未配置 Supabase 时可直接运行的演示模式。
 
 公开页面只展示笔名、简介、作品和互动数据，不展示学号。
@@ -43,10 +46,16 @@
 │  ├─ mobile-feed.mjs
 │  └─ utils.mjs
 ├─ supabase/
+│  ├─ config.toml
 │  ├─ schema.sql
+│  ├─ functions/
+│  │  ├─ _shared/
+│  │  ├─ account-email/
+│  │  └─ password-recovery/
 │  └─ migrations/
 │     ├─ 20260731_split_poetry_categories_and_lock_pen_name.sql
-│     └─ 20260802_allow_weekly_pen_name_changes.sql
+│     ├─ 20260802_allow_weekly_pen_name_changes.sql
+│     └─ 20260802_account_recovery_security.sql
 ├─ tests/
 │  ├─ browser-check.cjs
 │  ├─ data-service.test.mjs
@@ -225,6 +234,8 @@ order by category;
 6. 仅在两项迁移和查询都通过后，继续下面的前端发布步骤。
 
 迁移与前端发布应安排在同一维护窗口：新前端投稿允许“新诗”和“旧诗”，旧分类约束会拒绝这些投稿。前端保留旧“诗歌”显示为“新诗”的兼容映射，但这不是跳过数据库迁移的替代方案。
+
+账号安全与密码找回需要第三项迁移 `supabase/migrations/20260802_account_recovery_security.sql`、两个 Edge Function 及对应的 Edge 秘密。确切的部署顺序、上线状态分级（`off → warn → enforce`）、回滚 SQL 和密钥处理见 [SECURITY.md](./SECURITY.md) 的“账号安全与密码找回的密钥和部署”。在负责人确认 staging 全部通过前，不要把生产 `write_gate` 切到 `enforce`。
 
 ### 7. 配置站点地址
 

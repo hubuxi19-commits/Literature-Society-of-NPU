@@ -273,3 +273,47 @@ test("账号安全与找回密码表单满足可访问性与视觉约束", async
   );
   assert.match(css, /\.recovery-dialog[\s\S]*?color:\s*var\(--ink\)/);
 });
+
+test("安全文档列出全部账号秘密并明确分级上线与批量上限", async () => {
+  const security = await readFile(new URL("../SECURITY.md", import.meta.url), "utf8");
+  for (const name of [
+    "BREVO_API_KEY",
+    "TURNSTILE_SECRET_KEY",
+    "TOKEN_PEPPER",
+    "RATE_LIMIT_PEPPER",
+  ]) {
+    assert.match(security, new RegExp(name));
+  }
+  assert.match(security, /off.*warn.*enforce/s);
+  assert.match(security, /每天最多 200/);
+});
+
+test("边缘函数环境示例只含秘密占位符且不留真实值", async () => {
+  const envExample = await readFile(
+    new URL("../supabase/functions/.env.example", import.meta.url),
+    "utf8",
+  );
+  for (const name of [
+    "ALLOWED_ORIGINS",
+    "BREVO_SENDER_EMAIL",
+    "BREVO_SENDER_NAME",
+    "BREVO_API_KEY",
+    "TURNSTILE_SECRET_KEY",
+    "TOKEN_PEPPER",
+    "RATE_LIMIT_PEPPER",
+  ]) {
+    assert.match(envExample, new RegExp(`^${name}=`, "m"), `缺少 ${name} 占位`);
+  }
+  for (const name of [
+    "BREVO_API_KEY",
+    "TURNSTILE_SECRET_KEY",
+    "TOKEN_PEPPER",
+    "RATE_LIMIT_PEPPER",
+  ]) {
+    assert.match(
+      envExample,
+      new RegExp(`^${name}=\\s*$`, "m"),
+      `${name} 示例不允许填入真实值`,
+    );
+  }
+});
