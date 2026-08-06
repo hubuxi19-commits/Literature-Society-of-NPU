@@ -11,5 +11,7 @@ supabase/functions/.env
 supabase/functions/.env.*
 !supabase/functions/.env.example
 js/config.local.mjs
+# supabase CLI 本地状态：关联、部署的临时产物不入库
+supabase/.temp/
 .DS_Store
 Thumbs.db

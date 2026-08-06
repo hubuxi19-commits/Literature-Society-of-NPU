@@ -73,10 +73,9 @@ export async function createSupabaseRequestClients({
   const jwt = bearerToken(request);
   if (!jwt) return null;
   const supabaseUrl = requiredValue(envGet, "SUPABASE_URL");
-  const publishableKey = requiredValue(
-    envGet,
-    "SUPABASE_PUBLISHABLE_KEY",
-  );
+  const publishableKey = parseSupabaseSecretKeys(
+    requiredValue(envGet, "SUPABASE_PUBLISHABLE_KEYS"),
+  ).default;
   const secretKeys = parseSupabaseSecretKeys(
     requiredValue(envGet, "SUPABASE_SECRET_KEYS"),
   );

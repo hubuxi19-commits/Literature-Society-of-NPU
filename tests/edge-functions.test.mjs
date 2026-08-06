@@ -1420,7 +1420,7 @@ test("production client factory keeps secret keys out of Authorization", async (
     createClientImpl,
     envGet: (name) => ({
       SUPABASE_URL: "https://project.supabase.co",
-      SUPABASE_PUBLISHABLE_KEY: publishableKey,
+      SUPABASE_PUBLISHABLE_KEYS: JSON.stringify({ default: publishableKey }),
       SUPABASE_SECRET_KEYS: JSON.stringify({ default: secretKey }),
     })[name],
     request: new Request("https://edge.example/account-email", {
@@ -1651,7 +1651,7 @@ test("production runtime confirms recovery change without mutating Auth email", 
     createClientImpl,
     envGet: (name) => ({
       SUPABASE_URL: "https://project.supabase.co",
-      SUPABASE_PUBLISHABLE_KEY: publishableKey,
+      SUPABASE_PUBLISHABLE_KEYS: JSON.stringify({ default: publishableKey }),
       SUPABASE_SECRET_KEYS: JSON.stringify({ default: secretKey }),
     })[name],
     allowedOrigins: [ORIGIN],
