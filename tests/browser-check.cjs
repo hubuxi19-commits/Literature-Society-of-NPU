@@ -948,23 +948,58 @@ async function accountSecurityFlow(browser, browserMessages) {
     throw new Error(`找回文案不是枚举安全文案：${knownNote}`);
   }
 
-  // 2. 新成员带找回邮箱注册：可以阅读，写操作被拦截并跳转账号安全页。
+  // 2. 新成员带找回邮箱注册：注册后直接落在账号安全页，看到合并绑定表单
+  //    （找回邮箱与验证码在同一张表单）。
   await page.locator("#accountButton").click();
   await expectVisible(page.locator("#authDialog"), "登录窗口");
   await page.getByRole("tab", { name: "注册" }).click();
-  await page.locator('#registerForm [name="studentNumber"]').fill("2024888888");
-  await page.locator('#registerForm [name="penName"]').fill("新墨");
-  await page.locator('#registerForm [name="password"]').fill("newmember88");
+  await page.locator('#registerForm [name="studentNumber"]').fill("2024777777");
+  await page.locator('#registerForm [name="penName"]').fill("青苔");
+  await page.locator('#registerForm [name="password"]').fill("moss8088");
   await page
     .locator('#registerForm [name="recoveryEmail"]')
-    .fill("newink@example.com");
+    .fill("moss@example.com");
   await page.getByRole("button", { name: "注册并进入" }).click();
   await page.locator("#authDialog").waitFor({ state: "hidden" });
   await expectVisible(
-    page.getByRole("heading", { name: "让作品被读见" }),
-    "新成员可以阅读首页",
+    page.getByRole("heading", { name: "账号安全" }),
+    "带找回邮箱注册后直接进入账号安全页",
   );
+  const bindForm = page.locator("#bindRecoveryForm");
+  await expectVisible(bindForm, "合并绑定表单");
+  await expectVisible(bindForm.locator('[name="recoveryEmail"]'), "合并表单找回邮箱输入");
+  const prefilledEmail = await bindForm
+    .locator('[name="recoveryEmail"]')
+    .inputValue();
+  if (prefilledEmail !== "moss@example.com") {
+    throw new Error(`合并表单没有预填注册邮箱：${prefilledEmail}`);
+  }
+  await expectVisible(bindForm.locator('[name="code"]'), "合并表单验证码输入");
 
+  // 3. 顶部账号菜单提供"账号安全"入口。
+  await page.locator("#accountButton").click();
+  await expectVisible(page.locator("#accountMenu"), "账号下拉菜单");
+  await expectVisible(
+    page.locator('#accountMenu a[href="#/account/security"]'),
+    "账号菜单账号安全入口",
+  );
+  await page.locator("#accountButton").click();
+  await page.locator("#accountMenu").waitFor({ state: "hidden" });
+
+  // 4. 合并表单：发送验证码后不换页、邮箱保留、提示验证码已发送。
+  await bindForm.locator('[name="recoveryEmail"]').fill("moss@example.com");
+  await bindForm.getByRole("button", { name: "发送验证码", exact: true }).click();
+  await expectVisible(bindForm.locator('[name="recoveryEmail"]'), "发送后找回邮箱输入仍在");
+  if (!(await bindForm.locator('[name="code"]').isEnabled())) {
+    throw new Error("发送验证码后验证码输入框应可输入");
+  }
+  const bindMessage = await bindForm.locator("[data-form-message]").textContent();
+  if (!bindMessage.includes("验证码已发送到")) {
+    throw new Error(`合并表单发送验证码后没有提示：${bindMessage}`);
+  }
+
+  // 5. 未验证成员写操作被拦截并跳回账号安全页。
+  await goToHash(page, "#/", "让作品被读见");
   await page.getByRole("link", { name: "开始写作" }).click();
   await expectVisible(
     page.getByRole("heading", { name: "账号安全" }),
@@ -976,9 +1011,9 @@ async function accountSecurityFlow(browser, browserMessages) {
     throw new Error(`写入拦截提示错误：${blockToast}`);
   }
 
-  // 3. 验证码 123456 验证后恢复写作能力。
-  await page.locator('#verifyRecoveryForm [name="code"]').fill("123456");
-  await page.getByRole("button", { name: "验证并继续" }).click();
+  // 6. 验证码 123456 验证后恢复写作能力。
+  await page.locator('#bindRecoveryForm [name="code"]').fill("123456");
+  await page.locator('#bindRecoveryForm').getByRole("button", { name: "验证并进入" }).click();
   await expectVisible(page.locator('[data-masked-email="true"]'), "验证后的掩码邮箱");
   await page.getByRole("button", { name: "返回继续" }).click();
   await page.waitForURL(/#\/write$/);

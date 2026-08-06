@@ -257,6 +257,14 @@ test("账号安全页和找回密码表单不公开邮箱", async () => {
   assert.doesNotMatch(html, /accounts\.wenyuan\.invalid/);
 });
 
+test("顶部账号菜单提供账号安全入口", async () => {
+  const html = await readFile(new URL("../index.html", import.meta.url), "utf8");
+  const menu = html.match(/<div\s+class="account-menu"[\s\S]*?<\/div>/)?.[0];
+  assert.ok(menu, "缺少顶部账号菜单");
+  assert.match(menu, /href="#\/account\/security"/);
+  assert.match(menu, />\s*账号安全\s*</);
+});
+
 test("账号安全与找回密码表单满足可访问性与视觉约束", async () => {
   const css = await readFile(
     new URL("../assets/styles.css", import.meta.url),

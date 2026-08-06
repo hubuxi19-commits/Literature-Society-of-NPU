@@ -1728,7 +1728,10 @@ function renderResendControl(nextSendAt) {
   return wrap;
 }
 
-function renderUnboundSecurity() {
+function renderBindingForm(status) {
+  const pending = status.state === "pending";
+  const resend = element("div", { attrs: { "data-resend-control": "" } });
+  if (pending) replaceContent(resend, renderResendControl(status.nextSendAt));
   const form = element("form", {
     className: "stack-form account-security-form",
     id: "bindRecoveryForm",
@@ -1739,42 +1742,10 @@ function renderUnboundSecurity() {
       element("input", {
         name: "recoveryEmail",
         type: "email",
+        value: pending ? state.accountSecurityPendingEmail ?? "" : "",
         attrs: { required: true, autocomplete: "email" },
       }),
     ]),
-    element("div", { attrs: { "data-turnstile": "" } }),
-    element("p", {
-      className: "form-message",
-      role: "status",
-      dataset: { formMessage: "bind" },
-    }),
-    element("button", {
-      className: "primary-button",
-      type: "submit",
-      text: "发送验证码",
-      dataset: { action: "request-recovery-code" },
-    }),
-  );
-  renderTurnstile(form);
-  return element("section", { className: "account-security-panel" }, [
-    element("p", {
-      className: "account-security-meta",
-      text: "绑定找回邮箱后，忘记密码时可以通过验证码重置。邮箱只用于验证，不会公开。",
-    }),
-    form,
-  ]);
-}
-
-function renderPendingSecurity(status) {
-  const form = element("form", {
-    className: "stack-form account-security-form",
-    id: "verifyRecoveryForm",
-  });
-  form.append(
-    element("p", {
-      className: "account-security-meta",
-      text: `验证码已发送到 ${status.maskedEmail}`,
-    }),
     element("label", {}, [
       element("span", { text: "六位验证码" }),
       element("input", {
@@ -1785,20 +1756,36 @@ function renderPendingSecurity(status) {
         attrs: { required: true, autocomplete: "one-time-code" },
       }),
     ]),
+    element("div", { attrs: { "data-turnstile": "" } }),
     element("p", {
       className: "form-message",
       role: "status",
-      dataset: { formMessage: "verify" },
+      dataset: { formMessage: "bind" },
+    }),
+    resend,
+    element("button", {
+      className: "secondary-button",
+      type: "button",
+      text: "发送验证码",
+      dataset: { action: "request-recovery-code" },
     }),
     element("button", {
       className: "primary-button",
       type: "submit",
-      text: "验证并继续",
+      text: "验证并进入",
       dataset: { action: "verify-recovery-code" },
     }),
-    renderResendControl(status.nextSendAt),
   );
-  return element("section", { className: "account-security-panel" }, [form]);
+  renderTurnstile(form);
+  return element("section", { className: "account-security-panel" }, [
+    element("p", {
+      className: "account-security-meta",
+      text: pending
+        ? `验证码已发送到 ${status.maskedEmail}，验证通过后即可继续操作。`
+        : "绑定找回邮箱后，忘记密码时可以通过验证码重置。邮箱只用于验证，不会公开。",
+    }),
+    form,
+  ]);
 }
 
 function renderVerifiedSecurity(status) {
@@ -1923,10 +1910,13 @@ async function renderAccountSecurity() {
       }),
     ]);
     let body;
-    if (status.state === "unbound") body = renderUnboundSecurity();
-    else if (status.state === "pending") body = renderPendingSecurity(status);
-    else if (status.state === "changing") body = renderChangingSecurity(status);
-    else body = renderVerifiedSecurity(status);
+    if (status.state === "unbound" || status.state === "pending") {
+      body = renderBindingForm(status);
+    } else if (status.state === "changing") {
+      body = renderChangingSecurity(status);
+    } else {
+      body = renderVerifiedSecurity(status);
+    }
     shell.append(head, body);
     replaceContent(app, shell);
   } catch (error) {
@@ -1948,7 +1938,18 @@ const accountSecurityActions = {
       state.accountSecurityPendingEmail = email;
       showToast(result.message, "success");
       await refreshSessionSecurity();
-      await renderAccountSecurity();
+      const security = state.session?.accountSecurity;
+      const message = form.querySelector("[data-form-message]");
+      if (message) {
+        message.textContent = security?.maskedEmail
+          ? `验证码已发送到 ${security.maskedEmail}`
+          : result.message;
+      }
+      const resendControl = form.querySelector("[data-resend-control]");
+      if (resendControl) {
+        replaceContent(resendControl, renderResendControl(security?.nextSendAt));
+      }
+      form.querySelector('[name="code"]')?.focus();
     } catch (error) {
       const message = form.querySelector("[data-form-message]");
       if (message) message.textContent = error.message;
@@ -2398,7 +2399,14 @@ async function handleAuthSubmit(form, mode) {
     showToast(welcomeMessage, "success");
     const returnHash = resolveAuthReturnHash(state.authReturnHash);
     state.authReturnHash = null;
-    if (returnHash && window.location.hash !== returnHash) {
+    if (mode === "register" && state.session.accountSecurity?.state === "pending") {
+      const target = "#/account/security";
+      if (window.location.hash !== target) {
+        window.location.hash = target;
+      } else {
+        await renderCurrentRoute();
+      }
+    } else if (returnHash && window.location.hash !== returnHash) {
       window.location.hash = returnHash;
     } else {
       await renderCurrentRoute();

@@ -302,6 +302,7 @@ img {
   text-decoration: none;
 }
 
+.account-menu a + a,
 .account-menu a + button {
   border-top: 1px solid var(--rule-light);
 }
