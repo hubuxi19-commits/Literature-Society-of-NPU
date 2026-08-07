@@ -2396,6 +2396,8 @@ function saveHomeSession() {
 
 async function loadBrowseWorks({ reset = true } = {}) {
   const requestId = ++state.browse.requestId;
+  const previousWorks = state.browse.works;
+  const previousCursor = state.browse.nextCursor;
   if (reset) {
     state.browse.works = [];
     state.browse.nextCursor = null;
@@ -2419,6 +2421,11 @@ async function loadBrowseWorks({ reset = true } = {}) {
     saveHomeSession();
   } catch (error) {
     if (requestId !== state.browse.requestId) return;
+    // 重置请求失败时恢复已加载批次，避免页面误显示为 0 篇
+    if (reset) {
+      state.browse.works = previousWorks;
+      state.browse.nextCursor = previousCursor;
+    }
     state.browse.error = error.message;
     state.browse.loading = false;
   }
