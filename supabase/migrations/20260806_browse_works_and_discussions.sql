@@ -37,6 +37,7 @@ declare
   v_last_id uuid;
   v_last_like bigint := 0;
   v_last_comment bigint := 0;
+  v_liked boolean := false;
   v_next text := null;
 begin
   if v_sort not in ('latest', 'likes', 'discussions') then
@@ -113,6 +114,10 @@ begin
   for v_rows in execute v_sql loop
     v_count := v_count + 1;
     if v_count <= v_limit then
+      v_liked := v_uid is not null and exists (
+        select 1 from public.likes own
+        where own.work_id = v_rows.id and own.user_id = v_uid
+      );
       v_works := v_works || jsonb_build_object(
         'id', v_rows.id,
         'author_id', v_rows.author_id,
@@ -128,11 +133,7 @@ begin
         'author_role', v_rows.author_role,
         'like_count', v_rows.like_count,
         'comment_count', v_rows.comment_count,
-        'liked_by_current_user', v_uid is not null
-          and exists (
-            select 1 from public.likes own
-            where own.work_id = v_rows.id and own.user_id = v_uid
-          )
+        'liked_by_current_user', v_liked
       );
       v_last_created := v_rows.created_at;
       v_last_id := v_rows.id;
