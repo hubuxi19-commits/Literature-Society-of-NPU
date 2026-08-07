@@ -9,7 +9,8 @@
 - 学号与密码注册、登录和退出。
 - Supabase Auth 会话，不在业务表保存或查询登录密码。
 - 发布和删除作品。
-- 标题、摘要和作者搜索。
+- 标题、摘要、正文和作者搜索（服务端全文检索）。
+- 首页服务端分页浏览：每次返回 10 篇，桌面“再读十篇”继续加载；讨论页独立分页，不再逐篇补查。
 - 新诗、旧诗、散文、小说、随笔与其他分类；旧“诗歌”数据会迁移为“新诗”。
 - 最新、最多喜欢和最多讨论排序。
 - 喜欢与取消喜欢。
@@ -55,7 +56,8 @@
 │  └─ migrations/
 │     ├─ 20260731_split_poetry_categories_and_lock_pen_name.sql
 │     ├─ 20260802_allow_weekly_pen_name_changes.sql
-│     └─ 20260802_account_recovery_security.sql
+│     ├─ 20260802_account_recovery_security.sql
+│     └─ 20260806_browse_works_and_discussions.sql
 ├─ tests/
 │  ├─ browser-check.cjs
 │  ├─ data-service.test.mjs
@@ -214,7 +216,7 @@ order by tablename, policyname;
 
 如果某个写操作在隐藏按钮后仍可通过浏览器控制台直接执行，且数据库没有拒绝，请不要上线。
 
-### 6. 升级已有项目：迁移分类、每周笔名修改与账号安全
+### 6. 升级已有项目：迁移分类、每周笔名修改、账号安全与分页浏览
 
 新建项目直接执行最新的 `supabase/schema.sql` 即可。已有项目必须在发布本次前端前，在同一个 Supabase 项目的 SQL Editor 中按以下顺序操作；本仓库**不表示这些迁移已在任何生产项目执行**。
 
@@ -233,7 +235,17 @@ order by category;
 
 6. 结果中不得出现 `诗歌`；只应出现 `新诗`、`旧诗`、`散文`、`小说`、`随笔`、`其他` 中实际有数据的分类。若仍出现 `诗歌` 或 SQL 执行报错，停止发布并先处理数据库问题。
 7. 确认 `account_recovery_emails`、`account_action_tokens`、`auth_rate_limits` 三张表的 RLS 均为 `true`，并确认 `site_settings.account_security.write_gate` 为 `off`。
-8. 仅在三条迁移和查询都通过后，继续下面的前端发布步骤。
+8. 仅在上述迁移和查询都通过后，继续下面的前端发布步骤。
+9. 分页浏览是稳定数据读取功能：在上述迁移之后执行 [`supabase/migrations/20260806_browse_works_and_discussions.sql`](./supabase/migrations/20260806_browse_works_and_discussions.sql)。该事务启用 `pg_trgm` 扩展、为作品正文建立 GIN 索引，并创建只读的分页聚合函数 `browse_works` 与 `browse_discussions`，供首页“再读十篇”、正文全文搜索和讨论页分页调用。随后确认两个函数已存在：
+
+```sql
+select proname
+from pg_proc
+where proname in ('browse_works', 'browse_discussions')
+order by proname;
+```
+
+分页浏览只读取已发布作品，是只读功能，不需要调整 `write_gate`；但新前端在发布前依赖这两个函数，应与前端安排在同一维护窗口。
 
 迁移与前端发布应安排在同一维护窗口：新前端投稿允许“新诗”和“旧诗”，旧分类约束会拒绝这些投稿。前端保留旧“诗歌”显示为“新诗”的兼容映射，但这不是跳过数据库迁移的替代方案。
 

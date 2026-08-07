@@ -90,7 +90,7 @@
 ### 预演（staging）部署顺序
 
 1. 确认目标项目是空白的 staging 项目，不是生产项目。
-2. 依次执行 `supabase/migrations/20260731_split_poetry_categories_and_lock_pen_name.sql`、`20260802_allow_weekly_pen_name_changes.sql` 和 `20260802_account_recovery_security.sql`。
+2. 依次执行 `supabase/migrations/20260731_split_poetry_categories_and_lock_pen_name.sql`、`20260802_allow_weekly_pen_name_changes.sql`、`20260802_account_recovery_security.sql` 和 `20260806_browse_works_and_discussions.sql`。最后一个提供首页分页、正文全文搜索与讨论分页所需的只读函数 `browse_works`、`browse_discussions`，是稳定数据读取功能，不需要改动 `write_gate`。
 3. 确认全部业务/隐私表（`profiles`、`works`、`likes`、`comments`、`site_settings`、验证码令牌与账户安全相关表等）的 RLS 均为 `true`。
 4. 通过 Dashboard 设置 Edge 秘密，不把真实值粘贴到聊天、终端输出、文件、截图或 Git。
 5. 在 Brevo 注册一个发件人，将 provider 替换后的事务发件人地址写入成员帮助文案。
