@@ -350,3 +350,11 @@ test("讨论页使用独立分页而不是逐篇补查", async () => {
   const loadAllDiscussions = app.match(/async\s+function\s+loadAllDiscussions[\s\S]*?\n}\n/)?.[0] ?? "";
   assert.doesNotMatch(loadAllDiscussions, /service\.getWork\s*\(/, "讨论页不得逐篇补查");
 });
+
+test("移动首页接近末尾时预取下一批", async () => {
+  const app = await readFile(new URL("../js/app.js", import.meta.url), "utf8");
+  assert.match(app, /createMobileFeedController\([\s\S]*?state\.browse\.works/);
+  assert.match(app, /isAtEnd\(\)|remaining/);
+  assert.match(app, /loadMoreWorks\(\)/);
+  assert.match(app, /append\(/);
+});

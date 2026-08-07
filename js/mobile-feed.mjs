@@ -72,6 +72,9 @@ export function createMobileFeedController(works, random = Math.random) {
     isAtEnd() {
       return queue.length === 0 || cursor >= queue.length - 1;
     },
+    position() {
+      return cursor;
+    },
     next() {
       if (cursor >= queue.length - 1) return null;
       cursor += 1;

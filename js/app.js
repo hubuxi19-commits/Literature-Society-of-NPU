@@ -979,12 +979,12 @@ function createMobileSearchBand() {
   return band;
 }
 
-function buildMobileFeedSignature(works) {
+function buildMobileFeedSignature() {
+  // 签名只跟随筛选条件变化；同一筛选下预取追加的新批次不应重置队列。
   return JSON.stringify([
     state.filters.category,
     state.filters.query,
     state.filters.sort,
-    works.map((work) => work.id),
   ]);
 }
 
@@ -1167,16 +1167,30 @@ function createMobileWorkCard(work) {
   return card;
 }
 
+function maybePrefetchMobileNext() {
+  if (state.browse.loading || !state.browse.nextCursor) return;
+  const controller = state.mobileFeed.controller;
+  if (!controller) return;
+  // 剩余可展示条目 ≤ 2 时预取下一批，保证连续滑动不被分页打断。
+  if (controller.position() >= Math.max(state.browse.works.length - 3, 0)) {
+    loadMoreWorks();
+  }
+}
+
 function renderMobileHome() {
-  const filtered = filterAndSortWorks(state.works, state.filters);
-  const signature = buildMobileFeedSignature(filtered);
+  const filtered = state.browse.works;
+  const signature = buildMobileFeedSignature();
   if (!state.mobileFeed.controller) {
     state.mobileFeed.controller = createMobileFeedController(filtered);
     state.mobileFeed.signature = signature;
   } else if (signature !== state.mobileFeed.signature) {
     state.mobileFeed.controller.reset(filtered);
     state.mobileFeed.signature = signature;
+  } else {
+    state.mobileFeed.controller.append(filtered);
   }
+
+  maybePrefetchMobileNext();
 
   const shell = element("div", { className: "page-shell mobile-home" });
   const masthead = element("header", { className: "mobile-feed-masthead" }, [
@@ -2429,9 +2443,19 @@ async function loadBrowseWorks({ reset = true } = {}) {
       pageSize: 10,
     });
     if (requestId !== state.browse.requestId) return;
+    // 分页聚合只返回摘要字段，卡片需要正文时从完整列表补齐。
+    const contentById = new Map(
+      state.works.map((work) => [work.id, work.content]),
+    );
+    const withCardContent = (works) =>
+      works.map((work) =>
+        work.content == null && contentById.has(work.id)
+          ? { ...work, content: contentById.get(work.id) }
+          : work,
+      );
     state.browse.works = reset
-      ? result.works
-      : [...state.browse.works, ...result.works];
+      ? withCardContent(result.works)
+      : [...state.browse.works, ...withCardContent(result.works)];
     state.browse.nextCursor = result.nextCursor;
     state.browse.loading = false;
     saveHomeSession();

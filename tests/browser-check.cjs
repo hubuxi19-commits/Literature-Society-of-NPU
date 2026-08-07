@@ -751,6 +751,17 @@ async function mobileFlow(browser, browserMessages) {
   if (!(await endNextButton.isDisabled())) {
     throw new Error("移动作品队列没有在预期范围内到达末篇");
   }
+  const prefetchedCount = await page.evaluate(() => {
+    try {
+      const saved = JSON.parse(sessionStorage.getItem("wenyuan-home-session"));
+      return Array.isArray(saved?.works) ? saved.works.length : 0;
+    } catch {
+      return 0;
+    }
+  });
+  if (prefetchedCount <= 10) {
+    throw new Error(`移动队列接近末尾时没有预取下一批：${prefetchedCount}`);
+  }
   const lastWorkId = await mobileCard.getAttribute("data-work-id");
   await dispatchTouchSwipe(mobileCard, 320, 210);
   await mobileCard.locator(".mobile-work-copy").click();
