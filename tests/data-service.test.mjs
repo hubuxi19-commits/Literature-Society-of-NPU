@@ -593,6 +593,10 @@ test("演示服务按页返回作品、支持正文搜索与稳定游标", async
   });
   assert.equal(page1.works.length, 10);
   assert.ok(page1.nextCursor, "第一页应有游标");
+  assert.ok(
+    page1.works.every((work) => !("content" in work)),
+    "分页列表不应返回正文全文",
+  );
   const page2 = await service.listWorksPage({
     query: "",
     category: "全部",

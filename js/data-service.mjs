@@ -175,7 +175,9 @@ function createDemoService(config = {}) {
       category: options.category,
       sort: options.sort,
     });
-    const page = sorted.slice(start, start + pageSize);
+    const page = sorted
+      .slice(start, start + pageSize)
+      .map(({ content, ...summary }) => summary);
     const nextStart = start + page.length;
     return {
       works: page,
