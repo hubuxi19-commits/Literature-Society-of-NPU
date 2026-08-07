@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createDataService } from "../js/data-service.mjs";
+import { demoSeed } from "../js/demo-data.mjs";
 import { PEN_NAME_CHANGE_INTERVAL_MS } from "../js/utils.mjs";
 
 test("演示成员可以登录、发布、点赞、回复和删除自己的内容", async () => {
@@ -107,6 +108,16 @@ test("作品列表提供作者、点赞和评论聚合字段", async () => {
   assert.equal(typeof works[0].like_count, "number");
   assert.equal(typeof works[0].comment_count, "number");
   assert.equal(typeof works[0].liked_by_current_user, "boolean");
+});
+
+test("首页目录 listWorks 是轻量列表，不含正文 content", async () => {
+  const service = createDataService({ mode: "demo" });
+  const works = await service.listWorks();
+  assert.ok(works.length >= 1);
+  assert.ok(
+    works.every((work) => !("content" in work)),
+    "listWorks 不应携带正文 content",
+  );
 });
 
 test("作者首次可改笔名且七天内只能继续修改简介", async () => {
@@ -594,8 +605,8 @@ test("演示服务按页返回作品、支持正文搜索与稳定游标", async
   assert.equal(page1.works.length, 10);
   assert.ok(page1.nextCursor, "第一页应有游标");
   assert.ok(
-    page1.works.every((work) => !("content" in work)),
-    "分页列表不应返回正文全文",
+    page1.works.every((work) => "content" in work),
+    "分页列表每页返回正文 content（移动端诗句卡片依赖）",
   );
   const page2 = await service.listWorksPage({
     query: "",
@@ -651,6 +662,19 @@ test("演示服务独立分页讨论", async () => {
   assert.ok(page.discussions.length >= 1);
   assert.equal(typeof page.discussions[0].work_title, "string");
   assert.equal(typeof page.discussions[0].user_pen_name, "string");
+});
+
+test("演示讨论页只展示已发布作品的评论", async () => {
+  const seed = structuredClone(demoSeed);
+  const hiddenWork = seed.works.find((work) => work.id === "work-night-bus");
+  assert.ok(hiddenWork, "种子数据应有 work-night-bus");
+  hiddenWork.status = "draft";
+  const service = createDataService({ mode: "demo", seed });
+  const page = await service.listDiscussionsPage({ pageSize: 20 });
+  assert.ok(
+    page.discussions.every((discussion) => discussion.work_id !== hiddenWork.id),
+    "未发布作品的评论不应出现在讨论页",
+  );
 });
 
 test("Supabase 服务通过 RPC 分页浏览作品与讨论", async () => {
@@ -743,4 +767,41 @@ test("Supabase 服务通过 RPC 分页浏览作品与讨论", async () => {
     "browse_discussions",
     { p_cursor: "disc-cursor", p_page_size: 20 },
   ]);
+});
+
+test("Supabase 首页目录 listWorks 不请求 content 正文", async () => {
+  let selectArg = null;
+  const fakeClient = {
+    auth: {
+      getSession: async () => ({
+        data: { session: null },
+        error: null,
+      }),
+    },
+    from: () => ({
+      select: (columns) => {
+        selectArg = columns;
+        return {
+          eq: () => ({
+            order: async () => ({ data: [], error: null }),
+          }),
+        };
+      },
+    }),
+  };
+  const service = createDataService({
+    mode: "supabase",
+    supabaseUrl: "https://project.supabase.co",
+    supabasePublishableKey: "sb_publishable_test",
+    clientOverride: fakeClient,
+  });
+  await service.listWorks();
+  assert.ok(
+    selectArg.includes("id,author_id,title"),
+    "listWorks 应显式选择目录列",
+  );
+  assert.ok(
+    !selectArg.includes("content"),
+    "listWorks 不应请求 content 正文",
+  );
 });

@@ -46,7 +46,8 @@ function requirePublishableCategory(value) {
 }
 
 function createDemoService(config = {}) {
-  const state = clone(demoSeed);
+  // config.seed 允许测试注入定制的演示数据（如未发布作品）
+  const state = clone(config.seed ?? demoSeed);
   state.profiles.forEach((profile) => {
     profile.pen_name_changed_at ??= null;
   });
@@ -131,8 +132,10 @@ function createDemoService(config = {}) {
   const enrichWork = (work) => {
     const profile = getProfileRecord(work.author_id);
     const workLikes = state.likes.filter((like) => like.work_id === work.id);
+    // 计数口径与 browse_works 的 comment_count 一致：排除已删除评论
     const workComments = state.comments.filter(
-      (comment) => comment.work_id === work.id,
+      (comment) =>
+        comment.work_id === work.id && comment.is_deleted !== true,
     );
     return {
       ...clone(work),
@@ -176,9 +179,8 @@ function createDemoService(config = {}) {
       category: options.category,
       sort: options.sort,
     });
-    const page = sorted
-      .slice(start, start + pageSize)
-      .map(({ content, ...summary }) => summary);
+    // 与 browse_works 分页 RPC 一致：每页返回 content（移动端诗句卡片依赖正文渲染）
+    const page = sorted.slice(start, start + pageSize);
     const nextStart = start + page.length;
     return {
       works: page,
@@ -193,7 +195,13 @@ function createDemoService(config = {}) {
       20,
     );
     const start = decodeCursor(options.cursor);
+    // 与 SQL browse_discussions 口径一致：只展示已发布作品的评论，
+    // 已删除评论保留 is_deleted 标记返回，不额外过滤。
     const rows = state.comments
+      .filter((comment) => {
+        const work = state.works.find((item) => item.id === comment.work_id);
+        return work?.status === "published";
+      })
       .map((comment) => {
         const work = state.works.find((item) => item.id === comment.work_id);
         return {
@@ -280,9 +288,13 @@ function createDemoService(config = {}) {
     },
 
     async listWorks() {
+      // 首页目录是轻量列表，不携带正文；正文只在分页 RPC 与阅读页提供
       return state.works
         .filter((work) => work.status === "published")
-        .map(enrichWork)
+        .map((work) => {
+          const { content, ...summary } = enrichWork(work);
+          return summary;
+        })
         .sort(
           (left, right) =>
             new Date(right.created_at) - new Date(left.created_at),
@@ -666,7 +678,10 @@ function createSupabaseService(config) {
     const [{ data: likes, error: likeError }, { data: comments, error: commentError }] =
       await Promise.all([
         client.from("likes").select("work_id,user_id").in("work_id", ids),
-        client.from("comments").select("id,work_id").in("work_id", ids),
+        client
+          .from("comments")
+          .select("id,work_id,is_deleted")
+          .in("work_id", ids),
       ]);
     if (likeError) throw new Error(likeError.message);
     if (commentError) throw new Error(commentError.message);
@@ -676,8 +691,11 @@ function createSupabaseService(config) {
       author_bio: work.profiles?.bio ?? "",
       author_role: work.profiles?.role ?? "member",
       like_count: likes.filter((like) => like.work_id === work.id).length,
-      comment_count: comments.filter((comment) => comment.work_id === work.id)
-        .length,
+      // 与 browse_works 的 comment_count 口径一致：排除已删除评论
+      comment_count: comments.filter(
+        (comment) =>
+          comment.work_id === work.id && comment.is_deleted !== true,
+      ).length,
       liked_by_current_user: Boolean(
         sessionValue &&
           likes.some(
@@ -794,9 +812,12 @@ function createSupabaseService(config) {
 
     async listWorks() {
       const client = await getClient();
+      // 首页目录是轻量列表：显式列不取 content 正文，正文走 browse_works 分页 RPC
       const { data, error } = await client
         .from("works")
-        .select("*, profiles!works_author_id_fkey(pen_name,bio,role)")
+        .select(
+          "id,author_id,title,excerpt,category,is_featured,created_at,updated_at,profiles!works_author_id_fkey(pen_name,bio,role)",
+        )
         .eq("status", "published")
         .order("created_at", { ascending: false });
       if (error) throw new Error(error.message);

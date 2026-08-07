@@ -1049,15 +1049,18 @@ begin
     $query$
     with base as (
       select
-        w.id, w.author_id, w.title, w.excerpt, w.category, w.is_featured,
+        w.id, w.author_id, w.title, w.excerpt, w.content, w.category, w.is_featured,
         w.created_at, w.updated_at,
         p.pen_name as author_pen_name, p.bio as author_bio, p.role as author_role,
         (select count(*) from public.likes l where l.work_id = w.id)::bigint as like_count,
-        (select count(*) from public.comments c where c.work_id = w.id)::bigint as comment_count
+        -- 计数排除已删除评论，与 browse_discussions 的可见列表口径一致
+        (select count(*) from public.comments c where c.work_id = w.id and c.is_deleted = false)::bigint as comment_count
       from public.works w
       join public.profiles p on p.id = w.author_id
       where w.status = 'published'
         and (%L = '全部' or w.category = %L)
+        -- pg_trgm 的 GIN 索引最小匹配 3 字符；1-2 字中文查询不走索引、退化为 seq scan，
+        -- 仅作品量很大时才需评估 pgroonga 等方案（见 plan #10）。
         and (%L = ''
           or w.title ilike '%%' || %L || '%%'
           or w.excerpt ilike '%%' || %L || '%%'
@@ -1102,6 +1105,7 @@ begin
         'author_id', v_rows.author_id,
         'title', v_rows.title,
         'excerpt', v_rows.excerpt,
+        'content', v_rows.content,
         'category', v_rows.category,
         'is_featured', v_rows.is_featured,
         'created_at', v_rows.created_at,

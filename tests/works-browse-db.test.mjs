@@ -93,11 +93,12 @@ async function seed(db) {
       ('20000000-0000-4000-8000-000000000002', '${USER_A}')
   `);
   await db.exec(`
-    insert into public.comments (id, work_id, user_id, content, created_at)
+    insert into public.comments (id, work_id, user_id, content, is_deleted, created_at)
     values
-      ('30000000-0000-4000-8000-000000000001', '20000000-0000-4000-8000-000000000001', '${USER_B}', '评论一', now() - '2 minutes'::interval),
-      ('30000000-0000-4000-8000-000000000002', '20000000-0000-4000-8000-000000000001', '${USER_A}', '评论二', now() - '1 minutes'::interval),
-      ('30000000-0000-4000-8000-000000000003', '20000000-0000-4000-8000-000000000002', '${USER_C}', '评论三', now() - '3 minutes'::interval)
+      ('30000000-0000-4000-8000-000000000001', '20000000-0000-4000-8000-000000000001', '${USER_B}', '评论一', false, now() - '2 minutes'::interval),
+      ('30000000-0000-4000-8000-000000000002', '20000000-0000-4000-8000-000000000001', '${USER_A}', '评论二', false, now() - '1 minutes'::interval),
+      ('30000000-0000-4000-8000-000000000003', '20000000-0000-4000-8000-000000000002', '${USER_C}', '评论三', false, now() - '3 minutes'::interval),
+      ('30000000-0000-4000-8000-000000000004', '20000000-0000-4000-8000-000000000001', '${USER_C}', '已删除评论', true, now() - '4 minutes'::interval)
   `);
 }
 
@@ -129,7 +130,7 @@ test("browse_works 匿名可读、每页最多十篇且聚合计数正确", asyn
     assert.equal(typeof first.like_count, "number");
     assert.equal(typeof first.comment_count, "number");
     assert.equal(first.liked_by_current_user, false);
-    assert.equal("content" in first, false, "列表不应返回正文全文");
+    assert.equal("content" in first, true, "分页列表每页返回正文 content");
     assert.equal(first.author_pen_name, "松声");
   } finally {
     await db.close();
@@ -211,12 +212,32 @@ test("browse_discussions 独立分页且只含已发布作品评论", async () =
       select public.browse_discussions(null, 20) as payload
     `);
     const payload = rows[0].payload;
-    assert.equal(payload.discussions.length, 3);
+    assert.equal(payload.discussions.length, 4);
     assert.equal(payload.next_cursor, null);
     assert.equal(payload.discussions[0].work_title, "作品标题1");
     assert.equal(payload.discussions[0].user_pen_name, "松声");
     const ids = payload.discussions.map((d) => d.id);
-    assert.equal(new Set(ids).size, 3, "讨论不重复");
+    assert.equal(new Set(ids).size, 4, "讨论不重复");
+    const deleted = payload.discussions.find(
+      (d) => d.id === "30000000-0000-4000-8000-000000000004",
+    );
+    assert.equal(deleted.is_deleted, true, "软删除评论带标记返回");
+  } finally {
+    await db.close();
+  }
+});
+
+test("browse_works comment_count 排除已删除评论", async () => {
+  const db = await createDatabase();
+  try {
+    await seed(db);
+    const { rows } = await asRole(db, "anon", null, `
+      select public.browse_works('', '全部', 'discussions', null, 10) as payload
+    `);
+    const work1 = rows[0].payload.works.find(
+      (w) => w.id === "20000000-0000-4000-8000-000000000001",
+    );
+    assert.equal(work1.comment_count, 2, "已删除评论不应计入 comment_count");
   } finally {
     await db.close();
   }

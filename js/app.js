@@ -795,9 +795,11 @@ function renderDesktopHome() {
     className: "work-list",
     testId: "work-list",
   });
+  // 有作品 → 列表；加载失败 → 独立错误块（不再同时显示空态）；
+  // 无作品且无错误 → 空态。三者互斥。
   if (browseWorks.length) {
     browseWorks.forEach((work) => list.append(createWorkRow(work)));
-  } else {
+  } else if (!state.browse.error) {
     list.append(
       element("div", { className: "empty-state" }, [
         element("h2", { text: "没有找到对应作品" }),
@@ -1256,7 +1258,7 @@ function renderMobileHome() {
         ],
       ),
     );
-  } else {
+  } else if (!state.browse.error) {
     stage.append(
       element("div", { className: "empty-state" }, [
         element("h2", { text: "没有找到对应作品" }),
@@ -1266,6 +1268,23 @@ function renderMobileHome() {
           type: "button",
           text: "清除筛选",
           dataset: { action: "reset-filters" },
+        }),
+      ]),
+    );
+  }
+
+  if (state.browse.error) {
+    // 预取/续载失败：已有作品时重试续载下一批，无作品时重置重载
+    stage.append(
+      element("div", { className: "empty-state" }, [
+        element("p", { text: "加载新一批作品失败。" }),
+        element("button", {
+          className: "secondary-button",
+          type: "button",
+          text: "重试加载",
+          dataset: {
+            action: filtered.length ? "retry-browse-more" : "retry-browse",
+          },
         }),
       ]),
     );
@@ -2444,20 +2463,12 @@ async function loadBrowseWorks({ reset = true } = {}) {
       pageSize: 10,
     });
     if (requestId !== state.browse.requestId) return;
-    // 分页聚合只返回摘要字段，卡片需要正文时从完整列表补齐。
-    const contentById = new Map(
-      state.works.map((work) => [work.id, work.content]),
-    );
-    const withCardContent = (works) =>
-      works.map((work) =>
-        work.content == null && contentById.has(work.id)
-          ? { ...work, content: contentById.get(work.id) }
-          : work,
-      );
+    // 分页 RPC 每页返回 content（移动端诗句卡片依赖），不再从全量列表补齐
     state.browse.works = reset
-      ? withCardContent(result.works)
-      : [...state.browse.works, ...withCardContent(result.works)];
+      ? result.works
+      : [...state.browse.works, ...result.works];
     state.browse.nextCursor = result.nextCursor;
+    state.browse.error = null;
     state.browse.loading = false;
     saveHomeSession();
   } catch (error) {
@@ -2476,7 +2487,6 @@ async function loadBrowseWorks({ reset = true } = {}) {
 async function loadMoreWorks() {
   if (!state.browse.nextCursor || state.browse.loading) return;
   await loadBrowseWorks({ reset: false });
-  saveHomeSession();
 }
 
 function setFilters(patch) {
@@ -2488,7 +2498,6 @@ async function refreshWorks() {
   state.works = await service.listWorks();
   state.mobileFeed.signature = "";
   await loadBrowseWorks({ reset: true });
-  saveHomeSession();
 }
 
 async function initialize() {
@@ -2667,6 +2676,8 @@ document.addEventListener("click", async (event) => {
     loadDiscussionsPage({ reset: false });
   } else if (action === "retry-browse") {
     loadBrowseWorks({ reset: true });
+  } else if (action === "retry-browse-more") {
+    loadMoreWorks();
   } else if (action === "mobile-category") {
     setFilters({ category: trigger.dataset.category });
   } else if (action === "mobile-feed-previous") {
@@ -2852,6 +2863,8 @@ document.addEventListener("submit", async (event) => {
   } else if (form.id === "homeFilters") {
     event.preventDefault();
     const data = new FormData(form);
+    // 回车提交会先触发一次即时加载；清除 300ms 防抖定时器，避免再次重复加载
+    clearTimeout(window.__homeSearchTimer);
     setFilters({
       query: String(data.get("query") ?? "").trim(),
     });
