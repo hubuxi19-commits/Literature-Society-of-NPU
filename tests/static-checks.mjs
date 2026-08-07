@@ -383,6 +383,6 @@ test("关键元信息字号不小于 13px 且移动表单不小于 16px", async 
   );
   assert.match(
     css,
-    /\.primary-button[\s\S]*?min-height:\s*44px|\.load-more-row[\s\S]*?min-height:\s*44px/,
+    /\.load-more-row\s*\.primary-button\s*\{[\s\S]*?min-height:\s*44px/,
   );
 });
