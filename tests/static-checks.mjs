@@ -357,4 +357,9 @@ test("移动首页接近末尾时预取下一批", async () => {
   assert.match(app, /isAtEnd\(\)|remaining/);
   assert.match(app, /loadMoreWorks\(\)/);
   assert.match(app, /append\(/);
+  // 预取特性需真实存在，避免仅靠上述宽松断言形成同义反复。
+  assert.match(app, /maybePrefetchMobileNext/);
+  assert.match(app, /length\s*-\s*3/);
+  assert.match(app, /controller\.append\(filtered\)/);
+  assert.match(app, /state\.browse\.error/);
 });

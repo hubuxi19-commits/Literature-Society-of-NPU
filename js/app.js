@@ -1169,6 +1169,7 @@ function createMobileWorkCard(work) {
 
 function maybePrefetchMobileNext() {
   if (state.browse.loading || !state.browse.nextCursor) return;
+  if (state.browse.error) return;
   const controller = state.mobileFeed.controller;
   if (!controller) return;
   // 剩余可展示条目 ≤ 2 时预取下一批，保证连续滑动不被分页打断。
