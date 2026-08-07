@@ -1459,6 +1459,8 @@ async function refreshWorks() {
 
 （若 `refreshWorks` 被作品发布/删除后调用，需确保其不依赖 `state.works` 全量；其余使用 `state.works` 的代码点在本计划内替换为 `state.browse.works`。）
 
+> **范围决定（2026-08-07，负责人批准）：** 最终 code review 后确认，`initialize()`/`refreshWorks()` 仍保留 `service.listWorks()` 全量下载（含正文），未完全消除「加载全部作品」。理由：作品页「相关作品」块（同分类/同作者）依赖全量目录；卡片摘要兜底 `createExcerpt(work.content)` 依赖正文（`excerpt` 列允许空串）。分页 RPC 本身已服务端化且 staging 验证通过。此偏离记录在案，留给后续轮次处理（候选方案：`listWorks` 改为不查 `content` 的轻量目录，或相关作品改为服务端查询）。
+
 - [ ] **Step 7: 运行静态 + 单元测试验证 GREEN**
 
 Run:
