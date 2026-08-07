@@ -345,6 +345,17 @@ git push origin main
 
 文档会出现 `service_role` 这个警示词；代码和配置中不得出现真实值。
 
+## 上线记录
+
+以下条目记录已实际发布到生产的真实改动（区别于上面的示例步骤）。
+
+### 2026-08-07 · 发布2：稳定数据读取
+
+- **前端**：功能分支 `codex/wenyuan-community-upgrade` 快进合并 `main`（`f9defe2` → `39ac2e7`）并推送；GitHub Pages（legacy，source `main`）构建完成，生产站已更新。
+- **数据库**：生产 Supabase 项目（ref `odfjxtzgekhiaktzaxas`）在 SQL Editor 执行了 [`supabase/migrations/20260806_browse_works_and_discussions.sql`](./supabase/migrations/20260806_browse_works_and_discussions.sql)：启用 `pg_trgm`、为作品正文建立 GIN 索引、创建只读分页聚合函数 `browse_works`/`browse_discussions`。
+- **发布内容**：首页服务端分页（每次 10 篇 + 「再读十篇」）、正文中文全文搜索、讨论页分页、移动端临近末尾自动预取、关键元信息字号与触控目标的可访问性优化。
+- **生产验证**：首页首批 10 篇且分页游标正常；「再读十篇」10 → 20 篇；正文搜索命中；讨论页正常显示；移动端作品卡正常；无全屏错误页。
+
 ## 启用 GitHub Pages
 
 1. 打开 GitHub 仓库的 Settings。
