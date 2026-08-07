@@ -523,7 +523,7 @@ main {
   gap: 0.35rem 1rem;
   color: var(--soft-ink);
   font-family: var(--utility);
-  font-size: 0.75rem;
+  font-size: 13px;
 }
 
 .filter-band {
@@ -656,6 +656,7 @@ main {
 
 .meta-link {
   color: var(--soft-ink);
+  font-size: 13px;
   text-decoration: none;
 }
 
@@ -740,6 +741,11 @@ main {
   display: flex;
   justify-content: center;
   padding-top: 2rem;
+}
+
+.load-more-row .primary-button {
+  min-height: 44px;
+  padding: 0 1.5rem;
 }
 
 .loading-state {
@@ -1940,6 +1946,13 @@ main {
 
   .filter-form {
     grid-template-columns: 1fr 1fr;
+  }
+
+  .filter-form input,
+  .filter-form select,
+  .filter-form button {
+    font-size: 16px;
+    min-height: 44px;
   }
 
   .search-field {

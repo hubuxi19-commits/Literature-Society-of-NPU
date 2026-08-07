@@ -363,3 +363,26 @@ test("移动首页接近末尾时预取下一批", async () => {
   assert.match(app, /controller\.append\(filtered\)/);
   assert.match(app, /state\.browse\.error/);
 });
+
+test("关键元信息字号不小于 13px 且移动表单不小于 16px", async () => {
+  const css = await readFile(
+    new URL("../assets/styles.css", import.meta.url),
+    "utf8",
+  );
+  const metaRule = css.match(
+    /\.discussion-meta,\s*\.work-meta,\s*\.profile-meta,\s*\.reading-meta\s*\{[\s\S]*?\n\}/,
+  )?.[0] ?? "";
+  assert.match(metaRule, /font-size:\s*13px/);
+  const metaLinkRule = css.match(
+    /\.meta-link\s*\{[\s\S]*?\n\}/,
+  )?.[0] ?? "";
+  assert.match(metaLinkRule, /font-size:\s*13px/);
+  assert.match(
+    css,
+    /@media \(max-width:\s*768px\)[\s\S]*?\.filter-form\s*input[\s\S]*?font-size:\s*16px/,
+  );
+  assert.match(
+    css,
+    /\.primary-button[\s\S]*?min-height:\s*44px|\.load-more-row[\s\S]*?min-height:\s*44px/,
+  );
+});
