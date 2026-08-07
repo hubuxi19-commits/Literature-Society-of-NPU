@@ -148,25 +148,26 @@ function createDemoService(config = {}) {
     };
   };
 
+  // 游标负载仅为 ASCII（{"start":N}），btoa/atob 在浏览器与 Node 中均可使用，
+  // 避免依赖仅在 Node 环境存在的 Buffer。
   const encodeCursor = (index) =>
-    Buffer.from(JSON.stringify({ start: index })).toString("base64");
+    btoa(JSON.stringify({ start: index }));
+
+  const decodeCursor = (cursor) => {
+    if (!cursor) return 0;
+    try {
+      return Number(JSON.parse(atob(String(cursor))).start || 0);
+    } catch {
+      return 0;
+    }
+  };
 
   const listWorksPageDemo = async (options = {}) => {
     const pageSize = Math.min(
       Math.max(Number(options.pageSize) || 10, 1),
       10,
     );
-    const start = (() => {
-      if (!options.cursor) return 0;
-      try {
-        return Number(
-          JSON.parse(Buffer.from(String(options.cursor), "base64").toString("utf8"))
-            .start || 0,
-        );
-      } catch {
-        return 0;
-      }
-    })();
+    const start = decodeCursor(options.cursor);
     const enriched = state.works
       .filter((work) => work.status === "published")
       .map(enrichWork);
@@ -191,17 +192,7 @@ function createDemoService(config = {}) {
       Math.max(Number(options.pageSize) || 20, 1),
       20,
     );
-    const start = (() => {
-      if (!options.cursor) return 0;
-      try {
-        return Number(
-          JSON.parse(Buffer.from(String(options.cursor), "base64").toString("utf8"))
-            .start || 0,
-        );
-      } catch {
-        return 0;
-      }
-    })();
+    const start = decodeCursor(options.cursor);
     const rows = state.comments
       .map((comment) => {
         const work = state.works.find((item) => item.id === comment.work_id);

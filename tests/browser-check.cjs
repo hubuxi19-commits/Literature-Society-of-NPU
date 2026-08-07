@@ -120,19 +120,33 @@ async function desktopFlow(browser, browserMessages) {
 
   const search = page.getByRole("textbox", { name: "搜索作品" });
   await search.fill("河流");
-  await search.press("Enter");
+  await page.waitForTimeout(450);
   const workList = page.getByTestId("work-list");
   await expectVisible(
     workList.getByText("河流向北", { exact: true }),
-    "搜索结果",
+    "防抖搜索结果",
   );
   if (
     await workList.getByText("末班车经过友谊校区", { exact: true }).count()
   ) {
-    throw new Error("搜索没有过滤无关作品");
+    throw new Error("防抖搜索没有过滤无关作品");
   }
   await search.fill("");
-  await search.press("Enter");
+  await page.waitForTimeout(450);
+  const loadMore = page.getByRole("button", { name: "再读十篇" });
+  const hasLoadMore = (await loadMore.count()) > 0;
+  if (!hasLoadMore) {
+    throw new Error("桌面首页没有再读十篇按钮");
+  }
+  const rowsBeforeCount = await workList.locator(".work-row").count();
+  await loadMore.click();
+  await page.waitForFunction(
+    (count) => document.querySelectorAll(".work-row").length > count,
+    rowsBeforeCount,
+  );
+  if ((await workList.locator(".work-row").count()) !== 12) {
+    throw new Error("再读十篇后列表条目不是 12");
+  }
   await categorySelect.selectOption("小说");
   await expectVisible(
     workList.getByText("没有名字的车站", { exact: true }),

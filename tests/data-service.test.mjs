@@ -604,10 +604,19 @@ test("演示服务按页返回作品、支持正文搜索与稳定游标", async
     cursor: page1.nextCursor,
     pageSize: 10,
   });
-  assert.equal(page2.works.length, 7);
-  assert.equal(page2.nextCursor, null);
-  const ids = [...page1.works, ...page2.works].map((w) => w.id);
-  assert.equal(new Set(ids).size, ids.length, "两页作品不应重叠");
+  assert.equal(page2.works.length, 10);
+  assert.ok(page2.nextCursor, "第二页应仍有游标");
+  const page3 = await service.listWorksPage({
+    query: "",
+    category: "全部",
+    sort: "latest",
+    cursor: page2.nextCursor,
+    pageSize: 10,
+  });
+  assert.equal(page3.works.length, 3);
+  assert.equal(page3.nextCursor, null);
+  const ids = [...page1.works, ...page2.works, ...page3.works].map((w) => w.id);
+  assert.equal(new Set(ids).size, ids.length, "各页作品不应重叠");
 
   const searched = await service.listWorksPage({
     query: "山雨欲来",

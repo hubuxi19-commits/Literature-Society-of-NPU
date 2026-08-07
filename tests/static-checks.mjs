@@ -329,3 +329,15 @@ test("边缘函数环境示例只含秘密占位符且不留真实值", async ()
   assert.doesNotMatch(envExample, /(?<![A-Z_])TOKEN_PEPPER/);
   assert.doesNotMatch(envExample, /(?<![A-Z_])RATE_LIMIT_PEPPER/);
 });
+
+test("首页实现分页浏览、搜索防抖与再读十篇", async () => {
+  const app = await readFile(new URL("../js/app.js", import.meta.url), "utf8");
+  assert.match(app, /browse:\s*\{[\s\S]*?nextCursor:\s*null/);
+  assert.match(app, /async\s+function\s+loadBrowseWorks\s*\(/);
+  assert.match(app, /async\s+function\s+loadMoreWorks\s*\(/);
+  assert.match(app, /requestId/);
+  assert.match(app, /state\.browse\.nextCursor/);
+  assert.match(app, /setTimeout\([\s\S]*?300\s*[,)]/);
+  assert.match(app, /再读十篇/);
+  assert.match(app, /service\.listWorksPage\(/);
+});

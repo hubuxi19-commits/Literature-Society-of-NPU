@@ -46,7 +46,10 @@ const toast = document.querySelector("#toast");
 const DRAFT_KEY = "wenyuan-writing-draft";
 const PROFILE_RETURN_SENTINEL = "__current-profile__";
 const SWIPE_CLICK_SUPPRESSION_MS = 2000;
+const HOME_SESSION_KEY = "wenyuan-home-session";
+const HOME_SCROLL_KEY = "wenyuan-home-scroll";
 const mobileHomeMedia = window.matchMedia("(max-width: 760px)");
+let previousRouteName = null;
 
 const state = {
   session: null,
@@ -59,6 +62,13 @@ const state = {
     query: "",
     category: "全部",
     sort: "latest",
+  },
+  browse: {
+    works: [],
+    nextCursor: null,
+    loading: false,
+    error: null,
+    requestId: 0,
   },
   mobileFeed: {
     controller: null,
@@ -593,9 +603,9 @@ function createFilterBand() {
   return band;
 }
 
-function calculateAuthors() {
+function calculateAuthors(works = []) {
   const map = new Map();
-  state.works.forEach((work) => {
+  works.forEach((work) => {
     const current = map.get(work.author_id) ?? {
       id: work.author_id,
       name: work.author_pen_name,
@@ -611,7 +621,7 @@ function calculateAuthors() {
   );
 }
 
-function renderCommunityRail() {
+function renderCommunityRail(works = state.browse.works) {
   const rail = element("aside", {
     className: "community-rail",
     attrs: { "aria-label": "社区动态" },
@@ -621,7 +631,7 @@ function renderCommunityRail() {
     element("h3", { text: "活跃作者" }),
   ]);
   const authorsList = element("ol", { className: "rail-list" });
-  calculateAuthors()
+  calculateAuthors(works)
     .slice(0, 5)
     .forEach((author) => {
       const item = element("li");
@@ -641,7 +651,7 @@ function renderCommunityRail() {
     element("h3", { text: "此刻被阅读" }),
   ]);
   const hotList = element("ol", { className: "rail-list" });
-  filterAndSortWorks(state.works, {
+  filterAndSortWorks(works, {
     query: "",
     category: "全部",
     sort: "likes",
@@ -680,6 +690,7 @@ function renderCommunityRail() {
 
 function renderDesktopHome() {
   const shell = element("div", { className: "page-shell desktop-home" });
+  const browseWorks = state.browse.works;
   const note = state.settings?.editor_note ?? {
     title: "把写下的交给彼此",
     body: "这里持续收录社员的新作，也保留认真、具体、彼此尊重的讨论。",
@@ -729,10 +740,10 @@ function renderDesktopHome() {
     ]),
   ]);
   const featuredList = element("ol", { className: "featured-list" });
-  const featuredWorks = state.works
+  const featuredWorks = browseWorks
     .filter((work) => work.is_featured)
     .slice(0, 3);
-  (featuredWorks.length ? featuredWorks : state.works.slice(0, 3)).forEach(
+  (featuredWorks.length ? featuredWorks : browseWorks.slice(0, 3)).forEach(
     (work, index) => featuredList.append(createFeaturedItem(work, index)),
   );
   featuredPanel.append(featuredList);
@@ -764,7 +775,6 @@ function renderDesktopHome() {
   discussionsPanel.append(discussionList);
   leadGrid.append(featuredPanel, discussionsPanel);
 
-  const filtered = filterAndSortWorks(state.works, state.filters);
   const content = element("section", { className: "content-grid" });
   const worksSection = element("div");
   worksSection.append(
@@ -773,15 +783,15 @@ function renderDesktopHome() {
         element("p", { className: "eyebrow", text: "NEW WRITING" }),
         element("h2", { text: "持续更新的新作" }),
       ]),
-      element("p", { text: `共 ${filtered.length} 篇` }),
+      element("p", { text: `已加载 ${browseWorks.length} 篇` }),
     ]),
   );
   const list = element("div", {
     className: "work-list",
     testId: "work-list",
   });
-  if (filtered.length) {
-    filtered.forEach((work) => list.append(createWorkRow(work)));
+  if (browseWorks.length) {
+    browseWorks.forEach((work) => list.append(createWorkRow(work)));
   } else {
     list.append(
       element("div", { className: "empty-state" }, [
@@ -797,7 +807,31 @@ function renderDesktopHome() {
     );
   }
   worksSection.append(list);
-  content.append(worksSection, renderCommunityRail());
+  if (state.browse.error) {
+    worksSection.append(
+      element("div", { className: "empty-state" }, [
+        element("p", { text: "加载新一批作品失败。" }),
+        element("button", {
+          className: "secondary-button",
+          type: "button",
+          text: "重试加载",
+          dataset: { action: "retry-browse" },
+        }),
+      ]),
+    );
+  } else if (state.browse.nextCursor) {
+    worksSection.append(
+      element("div", { className: "load-more-row" }, [
+        element("button", {
+          className: "primary-button",
+          type: "button",
+          text: "再读十篇",
+          dataset: { action: "load-more" },
+        }),
+      ]),
+    );
+  }
+  content.append(worksSection, renderCommunityRail(browseWorks));
 
   shell.append(hero, editorial, leadGrid, createFilterBand(), content);
   replaceContent(app, shell);
@@ -1270,6 +1304,7 @@ function setFeaturedLocally(workId, featured) {
     if (work && String(work.id) === normalizedId) work.is_featured = featured;
   };
   state.works.forEach(apply);
+  state.browse.works.forEach(apply);
   apply(state.currentWork);
 
   const button = document.querySelector(
@@ -2284,6 +2319,22 @@ function renderNotFound() {
   );
 }
 
+function readHomeScroll() {
+  try {
+    return Number(sessionStorage.getItem(HOME_SCROLL_KEY) || 0);
+  } catch {
+    return 0;
+  }
+}
+
+function writeHomeScroll(value) {
+  try {
+    sessionStorage.setItem(HOME_SCROLL_KEY, String(value));
+  } catch {
+    // sessionStorage 不可用时静默跳过
+  }
+}
+
 async function renderCurrentRoute() {
   accountMenu.hidden = true;
   closeProfileEditor();
@@ -2293,6 +2344,8 @@ async function renderCurrentRoute() {
     .setAttribute("aria-expanded", "false");
   updateHeader();
   const route = parseRoute(window.location.hash);
+  if (previousRouteName === "home") writeHomeScroll(window.scrollY || 0);
+  previousRouteName = route.name;
   cleanupPreparedExport();
   if (route.name !== "work") state.currentWork = null;
   try {
@@ -2305,14 +2358,89 @@ async function renderCurrentRoute() {
     else if (route.name === "submissions") renderSubmissions();
     else renderNotFound();
   } finally {
-    window.scrollTo({ top: 0, behavior: "instant" });
+    if (route.name === "home") {
+      window.scrollTo({ top: readHomeScroll(), behavior: "instant" });
+    } else {
+      window.scrollTo({ top: 0, behavior: "instant" });
+    }
     app.focus({ preventScroll: true });
   }
+}
+
+function readHomeSession() {
+  try {
+    const raw = sessionStorage.getItem(HOME_SESSION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed?.filters || !Array.isArray(parsed.works)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function saveHomeSession() {
+  try {
+    sessionStorage.setItem(
+      HOME_SESSION_KEY,
+      JSON.stringify({
+        filters: state.filters,
+        works: state.browse.works,
+        nextCursor: state.browse.nextCursor,
+      }),
+    );
+  } catch {
+    // sessionStorage 不可用时静默跳过
+  }
+}
+
+async function loadBrowseWorks({ reset = true } = {}) {
+  const requestId = ++state.browse.requestId;
+  if (reset) {
+    state.browse.works = [];
+    state.browse.nextCursor = null;
+    state.browse.error = null;
+  }
+  state.browse.loading = true;
+  try {
+    const result = await service.listWorksPage({
+      query: state.filters.query,
+      category: state.filters.category,
+      sort: state.filters.sort,
+      cursor: reset ? null : state.browse.nextCursor,
+      pageSize: 10,
+    });
+    if (requestId !== state.browse.requestId) return;
+    state.browse.works = reset
+      ? result.works
+      : [...state.browse.works, ...result.works];
+    state.browse.nextCursor = result.nextCursor;
+    state.browse.loading = false;
+    saveHomeSession();
+  } catch (error) {
+    if (requestId !== state.browse.requestId) return;
+    state.browse.error = error.message;
+    state.browse.loading = false;
+  }
+  if (parseRoute(window.location.hash).name === "home") renderHome();
+}
+
+async function loadMoreWorks() {
+  if (!state.browse.nextCursor || state.browse.loading) return;
+  await loadBrowseWorks({ reset: false });
+  saveHomeSession();
+}
+
+function setFilters(patch) {
+  Object.assign(state.filters, patch);
+  loadBrowseWorks({ reset: true });
 }
 
 async function refreshWorks() {
   state.works = await service.listWorks();
   state.mobileFeed.signature = "";
+  await loadBrowseWorks({ reset: true });
+  saveHomeSession();
 }
 
 async function refreshDiscussionsPreview() {
@@ -2339,11 +2467,18 @@ async function refreshDiscussionsPreview() {
 async function initialize() {
   showLoading();
   try {
+    const saved = readHomeSession();
+    if (saved) {
+      Object.assign(state.filters, saved.filters);
+      state.browse.works = saved.works;
+      state.browse.nextCursor = saved.nextCursor;
+    }
     [state.session, state.settings, state.works] = await Promise.all([
       service.getSession(),
       service.getSiteSettings(),
       service.listWorks(),
     ]);
+    if (!saved) await loadBrowseWorks({ reset: true });
     await refreshDiscussionsPreview();
     updateHeader();
     await renderCurrentRoute();
@@ -2497,11 +2632,13 @@ document.addEventListener("click", async (event) => {
     showToast("已退出登录。", "success");
     await renderCurrentRoute();
   } else if (action === "reset-filters") {
-    state.filters = { query: "", category: "全部", sort: "latest" };
-    renderHome();
+    setFilters({ query: "", category: "全部", sort: "latest" });
+  } else if (action === "load-more") {
+    loadMoreWorks();
+  } else if (action === "retry-browse") {
+    loadBrowseWorks({ reset: true });
   } else if (action === "mobile-category") {
-    state.filters.category = trigger.dataset.category;
-    renderMobileHome();
+    setFilters({ category: trigger.dataset.category });
   } else if (action === "mobile-feed-previous") {
     moveMobileFeed("previous");
   } else if (action === "mobile-feed-next") {
@@ -2685,8 +2822,9 @@ document.addEventListener("submit", async (event) => {
   } else if (form.id === "homeFilters") {
     event.preventDefault();
     const data = new FormData(form);
-    state.filters.query = String(data.get("query") ?? "").trim();
-    renderHome();
+    setFilters({
+      query: String(data.get("query") ?? "").trim(),
+    });
   } else if (form.id === "writingForm") {
     event.preventDefault();
     if (!requireVerifiedWrite(window.location.hash)) return;
@@ -2863,9 +3001,8 @@ document.addEventListener("change", (event) => {
   const target = event.target;
   if (!(target instanceof HTMLSelectElement)) return;
   if (target.form?.id === "homeFilters") {
-    if (target.name === "category") state.filters.category = target.value;
-    if (target.name === "sort") state.filters.sort = target.value;
-    renderHome();
+    if (target.name === "category") setFilters({ category: target.value });
+    if (target.name === "sort") setFilters({ sort: target.value });
   }
 });
 
@@ -2882,6 +3019,16 @@ document.addEventListener("input", (event) => {
     counter.textContent = `${countChineseText(draft.content ?? "")} 字`;
     const status = document.querySelector("[data-draft-status]");
     if (status) status.textContent = "草稿已保存在本机";
+  }
+});
+
+document.addEventListener("input", (event) => {
+  const target = event.target;
+  if (target instanceof HTMLInputElement && target.name === "query") {
+    clearTimeout(window.__homeSearchTimer);
+    window.__homeSearchTimer = setTimeout(() => {
+      setFilters({ query: target.value.trim() });
+    }, 300);
   }
 });
 

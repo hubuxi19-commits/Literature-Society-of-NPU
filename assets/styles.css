@@ -736,6 +736,12 @@ main {
   color: var(--soft-ink);
 }
 
+.load-more-row {
+  display: flex;
+  justify-content: center;
+  padding-top: 2rem;
+}
+
 .loading-state {
   display: grid;
   min-height: 60vh;
