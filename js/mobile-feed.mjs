@@ -60,6 +60,7 @@ export function resolveHorizontalSwipe(deltaX, deltaY, threshold = 56) {
 export function createMobileFeedController(works, random = Math.random) {
   let queue = buildMobileFeedQueue(works, random);
   let cursor = 0;
+  const seen = new Set(queue.map((work) => work.id));
 
   return {
     current() {
@@ -80,9 +81,19 @@ export function createMobileFeedController(works, random = Math.random) {
       if (cursor > 0) cursor -= 1;
       return queue[cursor] ?? null;
     },
+    append(nextWorks) {
+      uniqueWorks(nextWorks).forEach((work) => {
+        if (seen.has(work.id)) return;
+        seen.add(work.id);
+        queue.push(work);
+      });
+      return queue[cursor] ?? null;
+    },
     reset(nextWorks, nextRandom = Math.random) {
       queue = buildMobileFeedQueue(nextWorks, nextRandom);
       cursor = 0;
+      seen.clear();
+      queue.forEach((work) => seen.add(work.id));
       return queue[cursor] ?? null;
     },
   };

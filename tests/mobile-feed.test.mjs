@@ -82,3 +82,16 @@ test("只有明确水平手势才切换作品", () => {
   assert.equal(resolveHorizontalSwipe(-40, 2), null);
   assert.equal(resolveHorizontalSwipe(-90, 120), null);
 });
+
+test("追加批次保留顺序、去重且更新队尾状态", () => {
+  const a = { id: "a" };
+  const b = { id: "b" };
+  const dupA = { id: "a" };
+  const c = { id: "c" };
+  const controller = createMobileFeedController([a, b], () => 0.5);
+  controller.append([dupA, c]);
+  controller.next();
+  assert.equal(controller.next()?.id, "c", "追加后应能到达 c");
+  assert.equal(controller.isAtEnd(), true);
+  assert.equal(controller.current()?.id, "c");
+});
