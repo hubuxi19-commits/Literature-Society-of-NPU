@@ -140,3 +140,29 @@ test("前端资料更新调用笔名冷却 RPC", async () => {
   assert.match(source, /\.rpc\("update_own_profile"/);
   assert.match(source, /requested_pen_name:\s*penName/);
 });
+
+test("分页迁移增加正文搜索索引、聚合浏览与讨论分页函数", async () => {
+  const migration = await readFile(
+    new URL(
+      "../supabase/migrations/20260806_browse_works_and_discussions.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  assert.match(migration, /create extension if not exists pg_trgm/i);
+  assert.match(migration, /using gin\s*\(\s*content\s+gin_trgm_ops\s*\)/i);
+  assert.match(migration, /create or replace function public\.browse_works/i);
+  assert.match(migration, /create or replace function public\.browse_discussions/i);
+  assert.match(migration, /least\(greatest\(coalesce\(p_page_size, 10\), 1\), 10\)/i);
+  assert.match(migration, /status = 'published'/i);
+  assert.match(migration, /begin;/i);
+  assert.match(migration, /commit;/i);
+});
+
+test("schema 的分页块与迁移同时存在且函数只读已发布作品", async () => {
+  const schema = await readFile(schemaUrl, "utf8");
+  assert.match(schema, /-- BROWSE_READ_START/);
+  assert.match(schema, /-- BROWSE_READ_END/);
+  assert.match(schema, /create or replace function public\.browse_works/i);
+  assert.match(schema, /create or replace function public\.browse_discussions/i);
+});
