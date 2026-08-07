@@ -55,7 +55,6 @@ const state = {
   session: null,
   works: [],
   settings: null,
-  discussions: [],
   currentWork: null,
   currentExport: null,
   filters: {
@@ -70,6 +69,12 @@ const state = {
     error: null,
     requestId: 0,
   },
+  browseDiscussions: {
+    items: [],
+    nextCursor: null,
+    loading: false,
+  },
+  discussionRequestId: 0,
   mobileFeed: {
     controller: null,
     signature: "",
@@ -507,7 +512,7 @@ function createFeaturedItem(work, index) {
 }
 
 function buildActiveDiscussions() {
-  return [...state.discussions]
+  return [...state.browseDiscussions.items]
     .sort(
       (left, right) =>
         new Date(right.created_at) - new Date(left.created_at),
@@ -2148,90 +2153,101 @@ async function renderAuthor(profileId) {
   }
 }
 
-async function loadAllDiscussions() {
-  const worksWithComments = await Promise.all(
-    state.works.map(async (work) => {
-      try {
-        const detail = await service.getWork(work.id);
-        return detail.comments.map((comment) => ({
-          ...comment,
-          work_id: work.id,
-          work_title: work.title,
-        }));
-      } catch {
-        return [];
-      }
-    }),
-  );
-  return worksWithComments
-    .flat()
-    .sort(
-      (left, right) =>
-        new Date(right.created_at) - new Date(left.created_at),
-    );
+async function loadDiscussionsPage({ reset = true } = {}) {
+  const requestId = ++state.discussionRequestId;
+  if (reset) {
+    state.browseDiscussions.items = [];
+    state.browseDiscussions.nextCursor = null;
+  }
+  state.browseDiscussions.loading = true;
+  try {
+    const result = await service.listDiscussionsPage({
+      cursor: reset ? null : state.browseDiscussions.nextCursor,
+      pageSize: 20,
+    });
+    if (requestId !== state.discussionRequestId) return;
+    state.browseDiscussions.items = reset
+      ? result.discussions
+      : [...state.browseDiscussions.items, ...result.discussions];
+    state.browseDiscussions.nextCursor = result.nextCursor;
+    state.browseDiscussions.loading = false;
+  } catch (error) {
+    if (requestId !== state.discussionRequestId) return;
+    state.browseDiscussions.loading = false;
+    showError("讨论暂时无法加载", error.message, true);
+    return;
+  }
+  renderDiscussions();
 }
 
-async function renderDiscussions() {
-  showLoading("正在收拢讨论");
-  try {
-    state.discussions = await loadAllDiscussions();
-    const shell = element("div", { className: "page-shell" });
-    shell.append(
-      createPageHeader(
-        "DISCUSSIONS",
-        "正在讨论",
-        "一条好评论不是判词，而是把自己读到的细节交还给作者和下一位读者。",
-      ),
-    );
-    const list = element("ol", { className: "discussion-page-list" });
-    state.discussions.forEach((discussion) => {
-      const row = element("li", { className: "discussion-row" });
-      row.append(
-        element("time", {
-          text: formatDate(discussion.created_at),
-          attrs: { datetime: discussion.created_at },
-        }),
-        element("div", {}, [
-          element("div", { className: "discussion-meta" }, [
-            element("a", {
-              className: "meta-link",
-              href: `#/authors/${encodeURIComponent(discussion.user_id)}`,
-              text: discussion.user_pen_name,
-            }),
-            element("span", { text: "评论了" }),
-            element("a", {
-              className: "meta-link",
-              href: `#/works/${encodeURIComponent(discussion.work_id)}`,
-              text: discussion.work_title,
-            }),
-          ]),
-          element("blockquote", {
-            text: discussion.is_deleted
-              ? "该评论已由作者删除"
-              : discussion.content,
-          }),
+function renderDiscussions() {
+  const shell = element("div", { className: "page-shell" });
+  shell.append(
+    createPageHeader(
+      "DISCUSSIONS",
+      "正在讨论",
+      "一条好评论不是判词，而是把自己读到的细节交还给作者和下一位读者。",
+    ),
+  );
+  const list = element("ol", { className: "discussion-page-list" });
+  const discussions = state.browseDiscussions.items;
+  discussions.forEach((discussion) => {
+    const row = element("li", { className: "discussion-row" });
+    row.append(
+      element("time", {
+        text: formatDate(discussion.created_at),
+        attrs: { datetime: discussion.created_at },
+      }),
+      element("div", {}, [
+        element("div", { className: "discussion-meta" }, [
           element("a", {
-            className: "inline-link",
+            className: "meta-link",
+            href: `#/authors/${encodeURIComponent(discussion.user_id)}`,
+            text: discussion.user_pen_name,
+          }),
+          element("span", { text: "评论了" }),
+          element("a", {
+            className: "meta-link",
             href: `#/works/${encodeURIComponent(discussion.work_id)}`,
-            text: "进入讨论",
+            text: discussion.work_title,
           }),
         ]),
-      );
-      list.append(row);
-    });
-    if (!state.discussions.length) {
-      list.append(
-        element("li", {
-          className: "empty-state",
-          text: "社区里还没有讨论。",
+        element("blockquote", {
+          text: discussion.is_deleted
+            ? "该评论已由作者删除"
+            : discussion.content,
         }),
-      );
-    }
-    shell.append(list);
-    replaceContent(app, shell);
-  } catch (error) {
-    showError("讨论暂时无法加载", error.message, true);
+        element("a", {
+          className: "inline-link",
+          href: `#/works/${encodeURIComponent(discussion.work_id)}`,
+          text: "进入讨论",
+        }),
+      ]),
+    );
+    list.append(row);
+  });
+  if (!discussions.length) {
+    list.append(
+      element("li", {
+        className: "empty-state",
+        text: "社区里还没有讨论。",
+      }),
+    );
   }
+  shell.append(list);
+  if (state.browseDiscussions.nextCursor) {
+    shell.append(
+      element("div", { className: "load-more-row" }, [
+        element("button", {
+          className: "primary-button",
+          type: "button",
+          text: "更多讨论",
+          dataset: { action: "load-more-discussions" },
+        }),
+      ]),
+    );
+  }
+  replaceContent(app, shell);
 }
 
 function renderSubmissions() {
@@ -2354,7 +2370,7 @@ async function renderCurrentRoute() {
     else if (route.name === "author") await renderAuthor(route.id);
     else if (route.name === "write") renderWrite();
     else if (route.name === "account-security") await renderAccountSecurity();
-    else if (route.name === "discussions") await renderDiscussions();
+    else if (route.name === "discussions") await loadDiscussionsPage({ reset: true });
     else if (route.name === "submissions") renderSubmissions();
     else renderNotFound();
   } finally {
@@ -2450,27 +2466,6 @@ async function refreshWorks() {
   saveHomeSession();
 }
 
-async function refreshDiscussionsPreview() {
-  const candidates = [...state.works]
-    .sort((left, right) => right.comment_count - left.comment_count)
-    .slice(0, 4);
-  const details = await Promise.all(
-    candidates.map(async (work) => {
-      try {
-        const detail = await service.getWork(work.id);
-        return detail.comments.map((comment) => ({
-          ...comment,
-          work_id: work.id,
-          work_title: work.title,
-        }));
-      } catch {
-        return [];
-      }
-    }),
-  );
-  state.discussions = details.flat();
-}
-
 async function initialize() {
   showLoading();
   try {
@@ -2486,7 +2481,7 @@ async function initialize() {
       service.listWorks(),
     ]);
     if (!saved) await loadBrowseWorks({ reset: true });
-    await refreshDiscussionsPreview();
+    await loadDiscussionsPage({ reset: true });
     updateHeader();
     await renderCurrentRoute();
   } catch (error) {
@@ -2642,6 +2637,8 @@ document.addEventListener("click", async (event) => {
     setFilters({ query: "", category: "全部", sort: "latest" });
   } else if (action === "load-more") {
     loadMoreWorks();
+  } else if (action === "load-more-discussions") {
+    loadDiscussionsPage({ reset: false });
   } else if (action === "retry-browse") {
     loadBrowseWorks({ reset: true });
   } else if (action === "mobile-category") {
@@ -2984,7 +2981,7 @@ document.addEventListener("submit", async (event) => {
       state.works.forEach((work) => {
         if (work.author_id === profile.id) work.author_pen_name = profile.pen_name;
       });
-      state.discussions.forEach((comment) => {
+      state.browseDiscussions.items.forEach((comment) => {
         if (comment.user_id === profile.id) comment.user_pen_name = profile.pen_name;
       });
       updateHeader();

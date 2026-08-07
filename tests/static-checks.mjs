@@ -341,3 +341,12 @@ test("首页实现分页浏览、搜索防抖与再读十篇", async () => {
   assert.match(app, /再读十篇/);
   assert.match(app, /service\.listWorksPage\(/);
 });
+
+test("讨论页使用独立分页而不是逐篇补查", async () => {
+  const app = await readFile(new URL("../js/app.js", import.meta.url), "utf8");
+  assert.match(app, /listDiscussionsPage/);
+  assert.match(app, /state\.discussions\s*=|browseDiscussions/);
+  assert.match(app, /更多讨论/);
+  const loadAllDiscussions = app.match(/async\s+function\s+loadAllDiscussions[\s\S]*?\n}\n/)?.[0] ?? "";
+  assert.doesNotMatch(loadAllDiscussions, /service\.getWork\s*\(/, "讨论页不得逐篇补查");
+});
