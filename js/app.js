@@ -2177,7 +2177,7 @@ async function loadDiscussionsPage({ reset = true } = {}) {
     showError("讨论暂时无法加载", error.message, true);
     return;
   }
-  renderDiscussions();
+  if (parseRoute(window.location.hash).name === "discussions") renderDiscussions();
 }
 
 function renderDiscussions() {
@@ -2638,6 +2638,7 @@ document.addEventListener("click", async (event) => {
   } else if (action === "load-more") {
     loadMoreWorks();
   } else if (action === "load-more-discussions") {
+    if (state.browseDiscussions.loading) return;
     loadDiscussionsPage({ reset: false });
   } else if (action === "retry-browse") {
     loadBrowseWorks({ reset: true });
