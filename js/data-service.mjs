@@ -696,6 +696,35 @@ function createSupabaseService(config) {
     }));
   };
 
+  const listWorksPageRemote = async (options = {}) => {
+    const client = await getClient();
+    const { data, error } = await client.rpc("browse_works", {
+      p_search: String(options.query ?? ""),
+      p_category: String(options.category ?? "全部"),
+      p_sort: String(options.sort ?? "latest"),
+      p_cursor: options.cursor ?? null,
+      p_page_size: Number(options.pageSize) || 10,
+    });
+    if (error) throw new Error(error.message);
+    return {
+      works: Array.isArray(data?.works) ? data.works : [],
+      nextCursor: data?.next_cursor ?? null,
+    };
+  };
+
+  const listDiscussionsPageRemote = async (options = {}) => {
+    const client = await getClient();
+    const { data, error } = await client.rpc("browse_discussions", {
+      p_cursor: options.cursor ?? null,
+      p_page_size: Number(options.pageSize) || 20,
+    });
+    if (error) throw new Error(error.message);
+    return {
+      discussions: Array.isArray(data?.discussions) ? data.discussions : [],
+      nextCursor: data?.next_cursor ?? null,
+    };
+  };
+
   const service = {
     mode: "supabase",
     isDemo: false,
@@ -779,6 +808,14 @@ function createSupabaseService(config) {
         .order("created_at", { ascending: false });
       if (error) throw new Error(error.message);
       return enrichRemoteWorks(client, data ?? []);
+    },
+
+    async listWorksPage(options = {}) {
+      return listWorksPageRemote(options);
+    },
+
+    async listDiscussionsPage(options = {}) {
+      return listDiscussionsPageRemote(options);
     },
 
     async getWork(workId) {

@@ -639,3 +639,95 @@ test("演示服务独立分页讨论", async () => {
   assert.equal(typeof page.discussions[0].work_title, "string");
   assert.equal(typeof page.discussions[0].user_pen_name, "string");
 });
+
+test("Supabase 服务通过 RPC 分页浏览作品与讨论", async () => {
+  const invoked = [];
+  const fakeClient = {
+    auth: {
+      getSession: async () => ({
+        data: { session: null },
+        error: null,
+      }),
+    },
+    rpc: async (name, args) => {
+      invoked.push([name, args]);
+      if (name === "browse_works") {
+        return {
+          data: {
+            works: [
+              {
+                id: "work-1",
+                title: "返回作品",
+                like_count: 3,
+                comment_count: 1,
+                liked_by_current_user: false,
+              },
+            ],
+            next_cursor: "cursor-1",
+          },
+          error: null,
+        };
+      }
+      if (name === "browse_discussions") {
+        return {
+          data: {
+            discussions: [
+              {
+                id: "disc-1",
+                work_title: "返回作品",
+                user_pen_name: "松声",
+                content: "评论",
+              },
+            ],
+            next_cursor: null,
+          },
+          error: null,
+        };
+      }
+      return { data: null, error: { message: "unknown" } };
+    },
+    from: () => ({
+      select: () => ({
+        eq: () => ({
+          single: async () => ({ data: null, error: null }),
+        }),
+      }),
+    }),
+  };
+  const service = createDataService({
+    mode: "supabase",
+    supabaseUrl: "https://project.supabase.co",
+    supabasePublishableKey: "sb_publishable_test",
+    clientOverride: fakeClient,
+  });
+  const worksPage = await service.listWorksPage({
+    query: "山雨",
+    category: "新诗",
+    sort: "likes",
+    cursor: "prev-cursor",
+    pageSize: 10,
+  });
+  assert.equal(worksPage.works[0].title, "返回作品");
+  assert.equal(worksPage.nextCursor, "cursor-1");
+  assert.deepEqual(invoked.at(-1), [
+    "browse_works",
+    {
+      p_search: "山雨",
+      p_category: "新诗",
+      p_sort: "likes",
+      p_cursor: "prev-cursor",
+      p_page_size: 10,
+    },
+  ]);
+
+  const discussionsPage = await service.listDiscussionsPage({
+    cursor: "disc-cursor",
+    pageSize: 20,
+  });
+  assert.equal(discussionsPage.discussions[0].work_title, "返回作品");
+  assert.equal(discussionsPage.nextCursor, null);
+  assert.deepEqual(invoked.at(-1), [
+    "browse_discussions",
+    { p_cursor: "disc-cursor", p_page_size: 20 },
+  ]);
+});
