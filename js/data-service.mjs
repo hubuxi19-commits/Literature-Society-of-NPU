@@ -4,6 +4,7 @@ import {
   getPenNameChangeAvailability,
   maskEmail,
   PUBLISHABLE_CATEGORIES,
+  searchWorks,
   studentNumberToAuthEmail,
   validatePassword,
   validateStudentNumber,
@@ -147,6 +148,81 @@ function createDemoService(config = {}) {
     };
   };
 
+  const encodeCursor = (index) =>
+    Buffer.from(JSON.stringify({ start: index })).toString("base64");
+
+  const listWorksPageDemo = async (options = {}) => {
+    const pageSize = Math.min(
+      Math.max(Number(options.pageSize) || 10, 1),
+      10,
+    );
+    const start = (() => {
+      if (!options.cursor) return 0;
+      try {
+        return Number(
+          JSON.parse(Buffer.from(String(options.cursor), "base64").toString("utf8"))
+            .start || 0,
+        );
+      } catch {
+        return 0;
+      }
+    })();
+    const enriched = state.works
+      .filter((work) => work.status === "published")
+      .map(enrichWork);
+    const sorted = searchWorks(enriched, {
+      query: options.query,
+      category: options.category,
+      sort: options.sort,
+    });
+    const page = sorted.slice(start, start + pageSize);
+    const nextStart = start + page.length;
+    return {
+      works: page,
+      nextCursor:
+        nextStart < sorted.length ? encodeCursor(nextStart) : null,
+    };
+  };
+
+  const listDiscussionsPageDemo = async (options = {}) => {
+    const pageSize = Math.min(
+      Math.max(Number(options.pageSize) || 20, 1),
+      20,
+    );
+    const start = (() => {
+      if (!options.cursor) return 0;
+      try {
+        return Number(
+          JSON.parse(Buffer.from(String(options.cursor), "base64").toString("utf8"))
+            .start || 0,
+        );
+      } catch {
+        return 0;
+      }
+    })();
+    const rows = state.comments
+      .map((comment) => {
+        const work = state.works.find((item) => item.id === comment.work_id);
+        return {
+          ...enrichComment(comment),
+          work_title: work?.title ?? "已删除作品",
+          work_id: comment.work_id,
+        };
+      })
+      .sort(
+        (left, right) =>
+          new Date(right.created_at) - new Date(left.created_at) ||
+          String(left.id ?? "").localeCompare(String(right.id ?? "")),
+      );
+    const page = rows.slice(start, start + pageSize);
+    const nextStart = start + page.length;
+    return {
+      discussions: page,
+      nextCursor:
+        nextStart < rows.length ? encodeCursor(nextStart) : null,
+    };
+  };
+
   const service = {
     mode: "demo",
     isDemo: true,
@@ -218,6 +294,14 @@ function createDemoService(config = {}) {
           (left, right) =>
             new Date(right.created_at) - new Date(left.created_at),
         );
+    },
+
+    async listWorksPage(options = {}) {
+      return listWorksPageDemo(options);
+    },
+
+    async listDiscussionsPage(options = {}) {
+      return listDiscussionsPageDemo(options);
     },
 
     async getWork(workId) {

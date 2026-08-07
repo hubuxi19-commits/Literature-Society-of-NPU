@@ -194,6 +194,42 @@ export function filterAndSortWorks(works = [], filters = {}) {
   return [...filtered].sort(sorters[sort] ?? sorters.latest);
 }
 
+export function searchWorks(works = [], filters = {}) {
+  const query = String(filters.query ?? "").trim().toLocaleLowerCase("zh-CN");
+  const category = filters.category || "全部";
+  const sort = filters.sort || "latest";
+
+  const filtered = works.filter((work) => {
+    const categoryMatches =
+      category === "全部" || normalizeCategory(work.category) === category;
+    const haystack = [
+      work.title,
+      work.excerpt,
+      work.content,
+      work.author_pen_name,
+    ]
+      .map((value) => String(value ?? "").toLocaleLowerCase("zh-CN"))
+      .join("\n");
+    return categoryMatches && (!query || haystack.includes(query));
+  });
+
+  const sorters = {
+    latest: (left, right) =>
+      new Date(right.created_at ?? 0) - new Date(left.created_at ?? 0) ||
+      String(left.id ?? "").localeCompare(String(right.id ?? "")),
+    likes: (left, right) =>
+      Number(right.like_count ?? 0) - Number(left.like_count ?? 0) ||
+      new Date(right.created_at ?? 0) - new Date(left.created_at ?? 0) ||
+      String(left.id ?? "").localeCompare(String(right.id ?? "")),
+    discussions: (left, right) =>
+      Number(right.comment_count ?? 0) - Number(left.comment_count ?? 0) ||
+      new Date(right.created_at ?? 0) - new Date(left.created_at ?? 0) ||
+      String(left.id ?? "").localeCompare(String(right.id ?? "")),
+  };
+
+  return [...filtered].sort(sorters[sort] ?? sorters.latest);
+}
+
 export function escapeText(value) {
   return value == null ? "" : String(value);
 }

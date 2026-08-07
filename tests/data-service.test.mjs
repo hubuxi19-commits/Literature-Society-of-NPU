@@ -573,3 +573,69 @@ test("Supabase 注册绑定失败返回 deliveryWarning 且重认证复用会话
     "newmember88",
   ]);
 });
+
+test("演示服务按页返回作品、支持正文搜索与稳定游标", async () => {
+  const service = createDataService({ mode: "demo" });
+  await service.signIn({ studentNumber: "2023123456", password: "wenyuan88" });
+  for (let i = 1; i <= 11; i += 1) {
+    await service.createWork({
+      title: `分页作品${i}`,
+      excerpt: `摘要${i}`,
+      content: `正文第${i}段，包含专属诗句 山雨欲来。`,
+      category: "新诗",
+    });
+  }
+  const page1 = await service.listWorksPage({
+    query: "",
+    category: "全部",
+    sort: "latest",
+    pageSize: 10,
+  });
+  assert.equal(page1.works.length, 10);
+  assert.ok(page1.nextCursor, "第一页应有游标");
+  const page2 = await service.listWorksPage({
+    query: "",
+    category: "全部",
+    sort: "latest",
+    cursor: page1.nextCursor,
+    pageSize: 10,
+  });
+  assert.equal(page2.works.length, 7);
+  assert.equal(page2.nextCursor, null);
+  const ids = [...page1.works, ...page2.works].map((w) => w.id);
+  assert.equal(new Set(ids).size, ids.length, "两页作品不应重叠");
+
+  const searched = await service.listWorksPage({
+    query: "山雨欲来",
+    category: "全部",
+    sort: "latest",
+    pageSize: 10,
+  });
+  const searchedRest = await service.listWorksPage({
+    query: "山雨欲来",
+    category: "全部",
+    sort: "latest",
+    cursor: searched.nextCursor,
+    pageSize: 10,
+  });
+  const searchedAll = [...searched.works, ...searchedRest.works];
+  assert.ok(searchedAll.length === 11, "正文搜索应命中全部 11 篇新增作品");
+  assert.ok(searchedAll.every((w) => w.title.startsWith("分页作品")));
+
+  const cat = await service.listWorksPage({
+    query: "",
+    category: "散文",
+    sort: "latest",
+    pageSize: 10,
+  });
+  assert.ok(cat.works.length >= 1);
+  assert.ok(cat.works.every((w) => w.category === "散文"));
+});
+
+test("演示服务独立分页讨论", async () => {
+  const service = createDataService({ mode: "demo" });
+  const page = await service.listDiscussionsPage({ pageSize: 20 });
+  assert.ok(page.discussions.length >= 1);
+  assert.equal(typeof page.discussions[0].work_title, "string");
+  assert.equal(typeof page.discussions[0].user_pen_name, "string");
+});
