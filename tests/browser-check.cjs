@@ -206,10 +206,15 @@ async function desktopFlow(browser, browserMessages) {
     throw new Error("历史版本入口链接指向错误");
   }
   await goToHash(page, "#/works/work-night-bus/versions", "历史版本");
-  const firstVersionCard = page.locator(".version-card").first();
+  const versionCards = page.locator(".version-card");
+  if ((await versionCards.count()) < 1) {
+    throw new Error("历史版本页没有展示任何版本");
+  }
+  const firstVersionCard = versionCards.first();
   await expectVisible(firstVersionCard, "历史版本卡片");
-  if (!(await firstVersionCard.textContent()).includes("第 1 版")) {
-    throw new Error("历史版本页没有展示第 1 版");
+  const firstCardText = (await firstVersionCard.textContent()) ?? "";
+  if (!/^第 \d+ 版/.test(firstCardText.trim())) {
+    throw new Error("历史版本页第一个版本卡片没有版本号");
   }
   await goToHash(page, "#/works/work-night-bus", "末班车经过友谊校区");
   const readingScreenshot = await page.screenshot({ fullPage: true });

@@ -2938,7 +2938,12 @@ document.addEventListener("click", async (event) => {
       });
       await refreshWorks();
       showToast("已恢复旧版本。", "success");
-      window.location.hash = `#/works/${encodeURIComponent(workId)}/versions`;
+      const target = `#/works/${encodeURIComponent(workId)}/versions`;
+      if (window.location.hash !== target) {
+        window.location.hash = target;
+      } else {
+        await renderCurrentRoute();
+      }
     } catch (error) {
       if (routeToAccountSecurityIfUnverified(error)) return;
       showToast(error.message);
