@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
+const schemaUrl = new URL("../supabase/schema.sql", import.meta.url);
+
 test("HTML 使用独立样式和模块脚本并包含可访问弹窗", async () => {
   const html = await readFile(new URL("../index.html", import.meta.url), "utf8");
   assert.match(html, /assets\/styles\.css/);
@@ -385,4 +387,32 @@ test("关键元信息字号不小于 13px 且移动表单不小于 16px", async 
     css,
     /\.load-more-row\s*\.primary-button\s*\{[\s\S]*?min-height:\s*44px/,
   );
+});
+
+test("版本与批注迁移新增两张表、五个 RPC 并收回作品直接写", async () => {
+  const migration = await readFile(
+    new URL(
+      "../supabase/migrations/20260808_work_versions_and_quotes.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  assert.match(migration, /create table if not exists public\.work_versions/i);
+  assert.match(migration, /create table if not exists public\.comment_quotes/i);
+  assert.match(migration, /current_version_id uuid references public\.work_versions/i);
+  assert.match(migration, /revoke insert on table public\.works from authenticated/i);
+  assert.match(migration, /revoke update on table public\.works from authenticated/i);
+  for (const fn of ["create_work_version", "restore_work_version", "create_quoted_comment", "list_work_versions", "list_work_quotes"]) {
+    assert.match(migration, new RegExp(`create or replace function public\\.${fn}`));
+  }
+  assert.match(migration, /begin;/i);
+  assert.match(migration, /commit;/i);
+});
+
+test("schema 的版本批注块与迁移同时存在", async () => {
+  const schema = await readFile(schemaUrl, "utf8");
+  assert.match(schema, /-- VERSIONS_QUOTES_START/);
+  assert.match(schema, /-- VERSIONS_QUOTES_END/);
+  assert.match(schema, /create table if not exists public\.work_versions/i);
+  assert.match(schema, /create table if not exists public\.comment_quotes/i);
 });
