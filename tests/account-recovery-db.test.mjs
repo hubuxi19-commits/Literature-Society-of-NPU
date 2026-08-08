@@ -348,79 +348,6 @@ const coreWritePolicyCases = [
     },
   },
   {
-    name: "works_insert_own 阻止未验证投稿",
-    setup: [],
-    write: {
-      sql: `
-        insert into public.works (
-          id, author_id, title, content, category
-        ) values ($1, $2, '门禁投稿', '正文', '新诗')
-        returning id
-      `,
-      params: [WORK_ID, WRITER_ID],
-    },
-    denial: "error",
-    observe: {
-      sql: "select count(*)::integer from public.works where id = $1",
-      params: [WORK_ID],
-      before: 0,
-      after: 1,
-    },
-  },
-  {
-    name: "works_update_own_or_admin 阻止未验证作品更新",
-    setup: [
-      {
-        sql: `
-          insert into public.works (
-            id, author_id, title, content, category
-          ) values ($1, $2, '原题', '正文', '新诗')
-        `,
-        params: [WORK_ID, WRITER_ID],
-      },
-    ],
-    write: {
-      sql: `
-        update public.works
-        set title = '新题'
-        where id = $1
-        returning title
-      `,
-      params: [WORK_ID],
-    },
-    denial: "empty",
-    observe: {
-      sql: "select title from public.works where id = $1",
-      params: [WORK_ID],
-      before: "原题",
-      after: "新题",
-    },
-  },
-  {
-    name: "works_delete_own_or_admin 阻止未验证作品删除",
-    setup: [
-      {
-        sql: `
-          insert into public.works (
-            id, author_id, title, content, category
-          ) values ($1, $2, '待删作品', '正文', '新诗')
-        `,
-        params: [WORK_ID, WRITER_ID],
-      },
-    ],
-    write: {
-      sql: "delete from public.works where id = $1 returning id",
-      params: [WORK_ID],
-    },
-    denial: "empty",
-    observe: {
-      sql: "select count(*)::integer from public.works where id = $1",
-      params: [WORK_ID],
-      before: 1,
-      after: 0,
-    },
-  },
-  {
     name: "likes_insert_own 阻止未验证点赞",
     setup: [
       {
@@ -670,6 +597,124 @@ for (const scenario of coreWritePolicyCases) {
     }
   });
 }
+
+test("works 直接 insert/update/delete 已收回：无论是否验证邮箱都被权限拒绝", async () => {
+  const db = await createIncrementalDatabase();
+  try {
+    await createUser(db, {
+      id: WRITER_ID,
+      email: "writer@example.com",
+      penName: "写作者",
+    });
+    await db.query(`
+      insert into public.works (id, author_id, title, content, category)
+      values ($1, $2, '待改作品', '正文', '新诗')
+    `, [WORK_ID, WRITER_ID]);
+    await setWriteGate(db, "enforce");
+    const directWrites = [
+      [
+        `
+          insert into public.works (
+            id, author_id, title, content, category
+          ) values ($1, $2, '门禁投稿', '正文', '新诗')
+        `,
+        [WORK_ID, WRITER_ID],
+      ],
+      [
+        "update public.works set title = '新题' where id = $1",
+        [WORK_ID],
+      ],
+      [
+        "delete from public.works where id = $1",
+        [WORK_ID],
+      ],
+    ];
+    for (const [sql, params] of directWrites) {
+      await assert.rejects(
+        queryAsRole(db, "authenticated", WRITER_ID, sql, params),
+        /permission denied/i,
+      );
+    }
+    await verifyRecoveryEmail(db, WRITER_ID, "writer@example.com");
+    for (const [sql, params] of directWrites) {
+      await assert.rejects(
+        queryAsRole(db, "authenticated", WRITER_ID, sql, params),
+        /permission denied/i,
+        "验证后直接写仍被权限拒绝",
+      );
+    }
+  } finally {
+    await db.close();
+  }
+});
+
+test("作品写受保护 RPC 执行账号门禁：create_work_version / delete_work", async () => {
+  const db = await createIncrementalDatabase();
+  try {
+    await createUser(db, {
+      id: WRITER_ID,
+      email: "writer@example.com",
+      penName: "写作者",
+    });
+    await setWriteGate(db, "enforce");
+    await assert.rejects(
+      queryAsRole(
+        db,
+        "authenticated",
+        WRITER_ID,
+        "select * from public.create_work_version(null, null, '标题', '', '新诗', '正文', '')",
+      ),
+      /请先验证找回邮箱后再进行此操作/,
+    );
+    await assert.rejects(
+      queryAsRole(
+        db,
+        "authenticated",
+        WRITER_ID,
+        "select * from public.delete_work($1)",
+        [WORK_ID],
+      ),
+      /请先验证找回邮箱后再进行此操作/,
+    );
+    await verifyRecoveryEmail(db, WRITER_ID, "writer@example.com");
+    const created = await queryAsRole(
+      db,
+      "authenticated",
+      WRITER_ID,
+      "select public.create_work_version(null, null, '标题', '', '新诗', '正文', '') as payload",
+    );
+    assert.equal(created.rows[0].payload.version_number, 1);
+    const newWorkId = created.rows[0].payload.work_id;
+    await assert.rejects(
+      queryAsRole(
+        db,
+        "authenticated",
+        WRITER_ID,
+        "delete from public.works where id = $1",
+        [newWorkId],
+      ),
+      /permission denied/i,
+      "验证后直接 delete 仍被权限拒绝，只能经 delete_work RPC",
+    );
+    await queryAsRole(
+      db,
+      "authenticated",
+      WRITER_ID,
+      "select * from public.delete_work($1)",
+      [newWorkId],
+    );
+    assert.equal(
+      await scalar(
+        db,
+        "select count(*)::integer from public.works where id = $1",
+        [newWorkId],
+      ),
+      0,
+    );
+  } finally {
+    await db.close();
+  }
+});
 
 const securityDefinerRpcCases = [
   {
@@ -1234,7 +1279,7 @@ test("fresh schema 创建完整私有对象、RLS 与默认门禁", async () => 
   }
 });
 
-test("fresh schema 的策略与安全定义 RPC 执行同一账号门禁", async () => {
+test("fresh schema 的直接 works 写已收回，受保护 RPC 执行同一账号门禁", async () => {
   const db = await createFreshDatabase();
   try {
     await createUser(db, {
@@ -1243,6 +1288,7 @@ test("fresh schema 的策略与安全定义 RPC 执行同一账号门禁", async
       penName: "写作者",
     });
     await setWriteGate(db, "enforce");
+    // 直接 insert 已在权限层收回：无论是否验证邮箱都是 permission denied
     await assert.rejects(
       queryAsRole(
         db,
@@ -1255,7 +1301,7 @@ test("fresh schema 的策略与安全定义 RPC 执行同一账号门禁", async
         `,
         [WORK_ID, WRITER_ID],
       ),
-      /row-level security/i,
+      /permission denied/i,
     );
     await assert.rejects(
       queryAsRole(
@@ -1266,21 +1312,32 @@ test("fresh schema 的策略与安全定义 RPC 执行同一账号门禁", async
       ),
       /请先验证找回邮箱后再进行此操作/,
     );
+    await assert.rejects(
+      queryAsRole(
+        db,
+        "authenticated",
+        WRITER_ID,
+        "select * from public.create_work_version(null, null, 'Fresh 投稿', '', '新诗', '正文', '')",
+      ),
+      /请先验证找回邮箱后再进行此操作/,
+    );
 
     await verifyRecoveryEmail(db, WRITER_ID, "writer@example.com");
-    const inserted = await queryAsRole(
-      db,
-      "authenticated",
-      WRITER_ID,
-      `
-        insert into public.works (
-          id, author_id, title, content, category
-        ) values ($1, $2, 'Fresh 投稿', '正文', '新诗')
-        returning id
-      `,
-      [WORK_ID, WRITER_ID],
+    await assert.rejects(
+      queryAsRole(
+        db,
+        "authenticated",
+        WRITER_ID,
+        `
+          insert into public.works (
+            id, author_id, title, content, category
+          ) values ($1, $2, 'Fresh 投稿', '正文', '新诗')
+        `,
+        [WORK_ID, WRITER_ID],
+      ),
+      /permission denied/i,
+      "验证后直接 insert 仍被权限拒绝",
     );
-    assert.deepEqual(inserted.rows, [{ id: WORK_ID }]);
     const profile = await queryAsRole(
       db,
       "authenticated",
@@ -1288,6 +1345,13 @@ test("fresh schema 的策略与安全定义 RPC 执行同一账号门禁", async
       "select * from public.update_own_profile('新笔名', '新简介')",
     );
     assert.equal(profile.rows[0].bio, "新简介");
+    const created = await queryAsRole(
+      db,
+      "authenticated",
+      WRITER_ID,
+      "select public.create_work_version(null, null, 'Fresh 投稿', '', '新诗', '正文', '') as payload",
+    );
+    assert.equal(created.rows[0].payload.version_number, 1);
   } finally {
     await db.close();
   }

@@ -389,7 +389,7 @@ test("关键元信息字号不小于 13px 且移动表单不小于 16px", async 
   );
 });
 
-test("版本与批注迁移新增两张表、五个 RPC 并收回作品直接写", async () => {
+test("版本与批注迁移新增两张表、六个 RPC 并收回作品直接写（含删除）", async () => {
   const migration = await readFile(
     new URL(
       "../supabase/migrations/20260808_work_versions_and_quotes.sql",
@@ -402,7 +402,9 @@ test("版本与批注迁移新增两张表、五个 RPC 并收回作品直接写
   assert.match(migration, /current_version_id uuid references public\.work_versions/i);
   assert.match(migration, /revoke insert on table public\.works from authenticated/i);
   assert.match(migration, /revoke update on table public\.works from authenticated/i);
-  for (const fn of ["create_work_version", "restore_work_version", "create_quoted_comment", "list_work_versions", "list_work_quotes"]) {
+  assert.match(migration, /revoke delete on table public\.works from authenticated/i);
+  assert.match(migration, /create or replace function public\.delete_work/);
+  for (const fn of ["create_work_version", "restore_work_version", "create_quoted_comment", "list_work_versions", "list_work_quotes", "delete_work"]) {
     assert.match(migration, new RegExp(`create or replace function public\\.${fn}`));
   }
   assert.match(migration, /begin;/i);

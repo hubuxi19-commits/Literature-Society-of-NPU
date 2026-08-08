@@ -391,6 +391,162 @@ test("authenticated 无法直接写入 works 或新表（只能经 RPC）", asyn
       values ('${WORK_1}', 99, 't', 'c', '散文', '说明', '${USER_A}')
     `));
     assert.match(versionInsert.message, /permission denied|violates row-level security|permission/i);
+    const workDelete = await expectError(asRole(db, "authenticated", USER_A, `
+      delete from public.works where id = '${WORK_1}'
+    `));
+    assert.match(workDelete.message, /permission/i);
+  } finally {
+    await db.close();
+  }
+});
+
+test("批注展示串与前端 renderParagraphs 一致（单空格分隔与全角缩进段）", async () => {
+  const db = await createDatabase();
+  try {
+    await seed(db);
+    await applyVersionsMigration(db);
+    const content = "第一段。\n \n第二段。\n\n　第三段（全角缩进）";
+    const display = displayString(content);
+    const middlePara = "第二段。";
+    const start = display.indexOf(middlePara);
+    const end = start + middlePara.length;
+    const { rows } = await asRole(db, "authenticated", USER_A, `
+      select public.create_work_version(null, null, '一致性', '', '散文', '${content}', '') as payload
+    `);
+    const payload = rows[0].payload;
+    const { rows: verRows } = await db.query(
+      "select id from public.work_versions where work_id = $1 and version_number = 1",
+      [payload.work_id],
+    );
+    const v1 = verRows[0].id;
+    const quoted = await asRole(db, "authenticated", USER_B, `
+      select public.create_quoted_comment('${payload.work_id}', '${v1}', '${middlePara}', ${start}, ${end}, '全角缩进也不影响选中。') as payload
+    `);
+    assert.equal(quoted.rows[0].payload.quote.quote_text, middlePara);
+    const { rows: quoteList } = await asRole(db, "anon", null, `
+      select public.list_work_quotes('${payload.work_id}') as payload
+    `);
+    assert.equal(quoteList[0].payload[0].quote_text, middlePara);
+  } finally {
+    await db.close();
+  }
+});
+
+test("隐藏作品：非作者/非管理员不能创建批注，作者本人不受可见性阻断", async () => {
+  const db = await createDatabase();
+  try {
+    await seed(db);
+    await applyVersionsMigration(db);
+    await db.exec(`update public.works set status = 'hidden' where id = '${WORK_1}'`);
+    const { rows: verRows } = await db.query(
+      "select id from public.work_versions where work_id = $1 and version_number = 1",
+      [WORK_1],
+    );
+    const v1 = verRows[0].id;
+    const memberError = await expectError(asRole(db, "authenticated", USER_B, `
+      select public.create_quoted_comment('${WORK_1}', '${v1}', '第二段正文。', 7, 13, '他人不能批注隐藏作品') as payload
+    `));
+    assert.match(memberError.message, /作品不存在/);
+    const { rows } = await asRole(db, "authenticated", USER_A, `
+      select public.create_quoted_comment('${WORK_1}', '${v1}', '第二段正文。', 7, 13, '作者自批') as payload
+    `);
+    assert.equal(rows[0].payload.quote.quote_text, "第二段正文。");
+  } finally {
+    await db.close();
+  }
+});
+
+test("修改说明超过 200 字符被拒绝", async () => {
+  const db = await createDatabase();
+  try {
+    await seed(db);
+    await applyVersionsMigration(db);
+    const longSummary = "长".repeat(201);
+    const error = await expectError(asRole(db, "authenticated", USER_A, `
+      select public.create_work_version('${WORK_1}', 1, 'x', '', '散文', 'y', '${longSummary}') as payload
+    `));
+    assert.match(error.message, /不能超过 200/);
+    const restoreError = await expectError(asRole(db, "authenticated", USER_A, `
+      select public.restore_work_version('${WORK_1}', '00000000-0000-4000-8000-000000000000', 1, '${longSummary}') as payload
+    `));
+    assert.match(restoreError.message, /不能超过 200/);
+  } finally {
+    await db.close();
+  }
+});
+
+test("delete_work：作者删除自己的作品并级联清理批注与版本", async () => {
+  const db = await createDatabase();
+  try {
+    await seed(db);
+    await applyVersionsMigration(db);
+    const { rows: verRows } = await db.query(
+      "select id from public.work_versions where work_id = $1 and version_number = 1",
+      [WORK_1],
+    );
+    const v1 = verRows[0].id;
+    await asRole(db, "authenticated", USER_B, `
+      select public.create_quoted_comment('${WORK_1}', '${v1}', '第二段正文。', 7, 13, '要一起删掉的批注') as payload
+    `);
+    await asRole(db, "authenticated", USER_A, `
+      select public.delete_work('${WORK_1}')
+    `);
+    const workCount = await db.query("select count(*)::int as n from public.works where id = $1", [WORK_1]);
+    assert.equal(workCount.rows[0].n, 0);
+    const verCount = await db.query("select count(*)::int as n from public.work_versions where work_id = $1", [WORK_1]);
+    assert.equal(verCount.rows[0].n, 0);
+    const commentCount = await db.query("select count(*)::int as n from public.comments where work_id = $1", [WORK_1]);
+    assert.equal(commentCount.rows[0].n, 0);
+    const quoteCount = await db.query("select count(*)::int as n from public.comment_quotes where work_version_id = $1", [v1]);
+    assert.equal(quoteCount.rows[0].n, 0);
+  } finally {
+    await db.close();
+  }
+});
+
+test("delete_work：非作者删除被拒", async () => {
+  const db = await createDatabase();
+  try {
+    await seed(db);
+    await applyVersionsMigration(db);
+    const error = await expectError(asRole(db, "authenticated", USER_B, `
+      select public.delete_work('${WORK_1}')
+    `));
+    assert.match(error.message, /没有权限/);
+  } finally {
+    await db.close();
+  }
+});
+
+test("delete_work：管理员可删除他人作品", async () => {
+  const db = await createDatabase();
+  try {
+    await seed(db, { withAdmin: true });
+    await applyVersionsMigration(db);
+    await asRole(db, "authenticated", ADMIN_D, `
+      select public.delete_work('${WORK_1}')
+    `);
+    const workCount = await db.query("select count(*)::int as n from public.works where id = $1", [WORK_1]);
+    assert.equal(workCount.rows[0].n, 0);
+  } finally {
+    await db.close();
+  }
+});
+
+test("delete_work：未验证账号在 write_gate=enforce 时被拒", async () => {
+  const db = await createDatabase();
+  try {
+    await seed(db);
+    await applyVersionsMigration(db);
+    await db.exec(`
+      update public.site_settings
+      set value = jsonb_set(value, '{write_gate}', '"enforce"'::jsonb, true)
+      where key = 'account_security';
+    `);
+    const error = await expectError(asRole(db, "authenticated", USER_B, `
+      select public.delete_work('${WORK_1}')
+    `));
+    assert.match(error.message, /找回邮箱/);
   } finally {
     await db.close();
   }

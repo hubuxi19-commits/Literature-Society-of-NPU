@@ -99,6 +99,7 @@ grant select on table public.comment_quotes to anon, authenticated;
 -- 作品写入只经受保护 RPC，杜绝绕过版本化的直接写
 revoke insert on table public.works from authenticated;
 revoke update on table public.works from authenticated;
+revoke delete on table public.works from authenticated;
 
 create or replace function public.create_work_version(
   p_work_id uuid,
@@ -181,6 +182,9 @@ begin
     if v_change_summary = '' then
       raise exception '请填写简短修改说明';
     end if;
+    if char_length(v_change_summary) > 200 then
+      raise exception '修改说明不能超过 200 个字符';
+    end if;
   end if;
 
   insert into public.work_versions (
@@ -243,6 +247,9 @@ begin
   end if;
   if v_change_summary = '' then
     raise exception '请填写简短修改说明';
+  end if;
+  if char_length(v_change_summary) > 200 then
+    raise exception '修改说明不能超过 200 个字符';
   end if;
 
   select *
@@ -311,7 +318,48 @@ $$;
 revoke all on function public.restore_work_version(uuid, uuid, integer, text) from public;
 grant execute on function public.restore_work_version(uuid, uuid, integer, text) to authenticated;
 
--- 批注展示串：content 按 /\n\s*\n/ 分段、逐段 trim、去空段、以 \n 连接；
+-- 删除作品：作者或管理员、需验证找回邮箱；按引用/版本依赖顺序删除，
+-- 避免 comment_quotes 的 on delete restrict 阻断，杜绝绕过版本化的直接删除。
+create or replace function public.delete_work(p_work_id uuid)
+returns void
+language plpgsql
+volatile
+security definer
+set search_path = public
+as $$
+declare
+  v_work public.works;
+begin
+  if auth.uid() is null then
+    raise exception '请先登录';
+  end if;
+  if not public.is_account_write_allowed() then
+    raise exception '请先验证找回邮箱后再进行此操作';
+  end if;
+
+  select *
+  into v_work
+  from public.works
+  where id = p_work_id;
+
+  if v_work.id is null then
+    raise exception '作品不存在';
+  end if;
+  if v_work.author_id <> auth.uid() and not public.is_admin() then
+    raise exception '没有权限删除这篇作品';
+  end if;
+
+  delete from public.comments where work_id = p_work_id;
+  delete from public.works where id = p_work_id;
+  delete from public.work_versions where work_id = p_work_id;
+end;
+$$;
+
+revoke all on function public.delete_work(uuid) from public;
+grant execute on function public.delete_work(uuid) to authenticated;
+
+-- 批注展示串：content 按 /\n[[:space:]]*\n/ 分段、逐段 trim（含空格/Tab/回车/换行/垂直
+-- 制表/换页及全角空格 U+3000）、去空段、以 \n 连接（与前端 renderParagraphs 规则一致）；
 -- start_offset/end_offset 是 0 基字符偏移，与前端 renderParagraphs 的展示串一致。
 create or replace function public.create_quoted_comment(
   p_work_id uuid,
@@ -355,6 +403,9 @@ begin
   if v_work.id is null then
     raise exception '作品不存在';
   end if;
+  if v_work.status <> 'published' and v_work.author_id <> auth.uid() and not public.is_admin() then
+    raise exception '作品不存在';
+  end if;
 
   select *
   into v_version
@@ -374,8 +425,8 @@ begin
     raise exception '引用位置无效';
   end if;
 
-  for v_seg in select regexp_split_to_table(v_version.content, E'\n\\s*\n') loop
-    v_seg := btrim(v_seg);
+  for v_seg in select regexp_split_to_table(v_version.content, E'\n[[:space:]]*\n') loop
+    v_seg := btrim(v_seg, E' \t\r\n\v\f　');
     if v_seg <> '' then
       if v_display <> '' then
         v_display := v_display || E'\n';
