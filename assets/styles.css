@@ -2499,3 +2499,53 @@ main {
     transition-duration: 0.01ms !important;
   }
 }
+
+.quotes-block {
+  margin: 3rem 0;
+  border-top: 1px solid var(--rule-light);
+}
+.quote-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.quote-item {
+  padding: 1.25rem 0;
+  border-bottom: 1px solid var(--rule-light);
+}
+.quote-text {
+  margin: 0 0 0.5rem;
+  color: var(--vermilion);
+  font-style: normal;
+}
+.annotate-float {
+  z-index: 50;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.18);
+}
+.version-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.version-card {
+  padding: 1.5rem 0;
+  border-bottom: 1px solid var(--rule-light);
+}
+.version-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1rem;
+  align-items: baseline;
+}
+.version-badge {
+  font-family: var(--utility);
+  color: var(--soft-ink);
+}
+.version-summary {
+  margin: 0.5rem 0;
+}
+.version-body summary {
+  cursor: pointer;
+  font-family: var(--utility);
+  color: var(--soft-ink);
+}

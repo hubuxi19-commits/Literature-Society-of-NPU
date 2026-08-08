@@ -1449,12 +1449,77 @@ function createCommentItem(comment, workId, depth = 0) {
   return item;
 }
 
+let annotateButton = null;
+
+function computeQuoteSelection(versionId) {
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed) return null;
+  const body = document.querySelector("[data-annotatable]");
+  if (!body) return null;
+  const anchorPara = selection.anchorNode?.parentElement?.closest("p");
+  const focusPara = selection.focusNode?.parentElement?.closest("p");
+  if (!anchorPara || anchorPara !== focusPara) {
+    return { error: "请在同一段落内选择连续文字" };
+  }
+  if (!body.contains(anchorPara)) return null;
+  const paragraphs = Array.from(body.querySelectorAll("p"));
+  const paraIndex = paragraphs.indexOf(anchorPara);
+  if (paraIndex < 0) return null;
+  let displayOffset = 0;
+  for (let i = 0; i < paraIndex; i += 1) {
+    displayOffset += paragraphs[i].textContent.length + 1;
+  }
+  const text = anchorPara.textContent;
+  const start = Math.min(selection.anchorOffset, selection.focusOffset);
+  const end = Math.max(selection.anchorOffset, selection.focusOffset);
+  if (end <= start) return null;
+  return {
+    quoteText: text.slice(start, end),
+    startOffset: displayOffset + start,
+    endOffset: displayOffset + end,
+    versionId,
+  };
+}
+
+function showAnnotateButton(event) {
+  const body = event.target?.closest?.("[data-annotatable]");
+  if (!body) return;
+  const selection = computeQuoteSelection(body.dataset.versionId);
+  if (!selection) return;
+  if (selection.error) {
+    showToast(selection.error);
+    return;
+  }
+  const rect = window.getSelection().getRangeAt(0).getBoundingClientRect();
+  if (!annotateButton) {
+    annotateButton = element("button", {
+      className: "primary-button annotate-float",
+      type: "button",
+      text: "添加批注",
+      dataset: { action: "open-annotation" },
+    });
+    annotateButton.style.position = "fixed";
+    document.body.append(annotateButton);
+  }
+  annotateButton.style.left = `${Math.max(8, rect.left)}px`;
+  annotateButton.style.top = `${rect.bottom + 8}px`;
+  annotateButton.dataset.selection = JSON.stringify(selection);
+  annotateButton.hidden = false;
+}
+
+function hideAnnotateButton() {
+  if (annotateButton) annotateButton.hidden = true;
+}
+
 async function renderWork(workId) {
   showLoading("正在展开作品");
   cleanupPreparedExport();
   state.currentWork = null;
   try {
-    const work = await service.getWork(workId);
+    const [work, quotes] = await Promise.all([
+      service.getWork(workId),
+      service.listWorkQuotes(workId),
+    ]);
     state.currentWork = work;
     const shell = element("div", { className: "reading-shell" });
     const head = element("header", { className: "reading-head" });
@@ -1554,6 +1619,45 @@ async function renderWork(workId) {
       actionBar.append(adminActions);
     }
 
+    const quotesBlock = element("section", {
+      className: "quotes-block",
+      attrs: { "aria-labelledby": "quotes-title" },
+    });
+    quotesBlock.append(
+      element("p", { className: "eyebrow", text: "ANNOTATIONS" }),
+      element("h2", {
+        id: "quotes-title",
+        text: `批注 · ${quotes.length}`,
+      }),
+    );
+    if (quotes.length) {
+      const quoteList = element("ol", { className: "quote-list" });
+      quotes.forEach((quote) => {
+        const item = element("li", { className: "quote-item" }, [
+          element("blockquote", { className: "quote-text", text: `“${quote.quote_text}”` }),
+          element("p", {
+            text: quote.is_deleted ? "该批注已删除" : quote.comment_content,
+          }),
+          element("div", { className: "discussion-meta" }, [
+            element("span", { text: quote.user_pen_name }),
+            element("time", {
+              text: formatDate(quote.created_at),
+              attrs: { datetime: quote.created_at },
+            }),
+          ]),
+        ]);
+        quoteList.append(item);
+      });
+      quotesBlock.append(quoteList);
+    } else {
+      quotesBlock.append(
+        element("p", {
+          className: "profile-meta",
+          text: "还没有批注。选中正文中的一句话，写下你的发现。",
+        }),
+      );
+    }
+
     const authorNote = element("section", { className: "author-note" }, [
       element("div", {}, [
         element("p", { className: "eyebrow", text: "AUTHOR" }),
@@ -1651,12 +1755,19 @@ async function renderWork(workId) {
 
     shell.append(
       head,
-      renderParagraphs(work.content, work.category),
+      (() => {
+        const body = renderParagraphs(work.content, work.category);
+        body.dataset.workId = work.id;
+        body.dataset.versionId = work.current_version_id ?? "";
+        body.dataset.annotatable = "";
+        return body;
+      })(),
       actionBar,
       element("div", {
         className: "export-results-host",
         attrs: { "aria-live": "polite" },
       }),
+      quotesBlock,
       authorNote,
       commentsBlock,
       relatedBlock,
@@ -2643,6 +2754,11 @@ async function refreshWorks() {
 
 async function initialize() {
   showLoading();
+  document.addEventListener("mouseup", showAnnotateButton);
+  document.addEventListener("selectionchange", () => {
+    if (!window.getSelection()?.isCollapsed) return;
+    hideAnnotateButton();
+  });
   try {
     const saved = readHomeSession();
     if (saved) {
@@ -3002,6 +3118,32 @@ document.addEventListener("click", async (event) => {
       showToast(error.message);
     } finally {
       if (trigger.isConnected) trigger.disabled = false;
+    }
+  } else if (action === "open-annotation") {
+    const raw = trigger.dataset.selection;
+    if (!raw) return;
+    const selection = JSON.parse(raw);
+    const body = document.querySelector("[data-annotatable]");
+    if (!body) return;
+    const content = window.prompt("写下这条批注（1–2000 字）：");
+    if (content === null) return;
+    const text = String(content).trim();
+    if (!text) return;
+    try {
+      const result = await service.createQuotedComment({
+        workId: body.dataset.workId,
+        workVersionId: selection.versionId || body.dataset.versionId,
+        quoteText: selection.quoteText,
+        startOffset: selection.startOffset,
+        endOffset: selection.endOffset,
+        content: text,
+      });
+      showToast("批注已发表。", "success");
+      hideAnnotateButton();
+      await renderWork(body.dataset.workId);
+    } catch (error) {
+      if (routeToAccountSecurityIfUnverified(error)) return;
+      showToast(error.message);
     }
   } else if (action === "toggle-featured") {
     if (!requireVerifiedWrite(window.location.hash)) return;

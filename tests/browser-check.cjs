@@ -263,6 +263,47 @@ async function desktopFlow(browser, browserMessages) {
     "新回复",
   );
 
+  // 选区批注：选中正文第一行，浮动入口出现，提交后批注计数 +1 且原文与正文一致。
+  await page.evaluate(() => {
+    const body = document.querySelector("[data-annotatable]");
+    if (!body) throw new Error("阅读页缺少可批注正文");
+    const firstPara = body.querySelector("p");
+    const textNode = firstPara?.firstChild;
+    if (!firstPara || !textNode) throw new Error("阅读页正文缺少段落文本节点");
+    const range = document.createRange();
+    range.setStart(textNode, 0);
+    range.setEnd(textNode, 11);
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    firstPara.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+  });
+  const annotateFloat = page.locator(".annotate-float");
+  await expectVisible(annotateFloat, "选区批注浮动按钮");
+  const annotateQuoteText = await annotateFloat.evaluate((button) => {
+    const stored = JSON.parse(button.dataset.selection);
+    return stored.quoteText;
+  });
+  if (annotateQuoteText !== "车窗把夜色裁成一格一格") {
+    throw new Error(`批注引用原文与所选文字不符：${annotateQuoteText}`);
+  }
+  page.once("dialog", (dialog) => dialog.accept("自动化批注"));
+  await page.evaluate(() => document.querySelector(".annotate-float").click());
+  await page
+    .getByRole("heading", { name: "批注 · 1", exact: true })
+    .waitFor();
+  await expectVisible(
+    page.getByText(`“${annotateQuoteText}”`, { exact: true }),
+    "批注引用原文展示",
+  );
+  const quoteItemText = (await page.locator(".quote-item").first().textContent()) ?? "";
+  if (!quoteItemText.includes("自动化批注")) {
+    throw new Error(`批注正文没有显示：${quoteItemText}`);
+  }
+  if (!quoteItemText.includes("松声")) {
+    throw new Error(`批注作者没有显示：${quoteItemText}`);
+  }
+
   await page.getByRole("button", { name: "修改作品" }).click();
   await page.waitForURL(/#\/works\/work-night-bus\/edit$/);
   await page

@@ -439,3 +439,13 @@ test("写作台支持编辑既有作品并强制填写修改说明", async () =>
   assert.match(app, /保存新版本/);
   assert.match(app, /当前为第\s*[\s\S]*?版|当前版本/);
 });
+
+test("阅读页支持选区批注、浮动入口与批注列表", async () => {
+  const app = await readFile(new URL("../js/app.js", import.meta.url), "utf8");
+  assert.match(app, /listWorkQuotes\(/);
+  assert.match(app, /createQuotedComment\(/);
+  assert.match(app, /添加批注/);
+  assert.match(app, /getSelection\(\)/);
+  assert.match(app, /data-annotatable/);
+  assert.match(app, /quote_text/);
+});
