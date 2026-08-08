@@ -265,6 +265,10 @@ function createDemoService(config = {}) {
       .filter(Boolean)
       .join("\n");
 
+  // 构造期回填：为种子作品预先生成第 1 版快照并回填 current_version_id，
+  // 与 SQL 迁移中的幂等回填一致，避免 listWorks/getWork 暴露 null 指针。
+  state.works.forEach(ensureVersion1);
+
   const service = {
     mode: "demo",
     isDemo: true,
@@ -404,6 +408,10 @@ function createDemoService(config = {}) {
       state.likes = state.likes.filter((like) => like.work_id !== workId);
       state.comments = state.comments.filter(
         (comment) => comment.work_id !== workId,
+      );
+      state.workVersions.delete(workId);
+      state.commentQuotes = state.commentQuotes.filter(
+        (quote) => quote.work_id !== workId,
       );
     },
 
@@ -621,6 +629,8 @@ function createDemoService(config = {}) {
         quoteText.length > 500 ||
         !Number.isInteger(start) ||
         !Number.isInteger(end) ||
+        start < 0 ||
+        end > display.length ||
         end <= start ||
         display.slice(start, end) !== quoteText
       ) {

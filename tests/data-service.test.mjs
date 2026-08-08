@@ -108,6 +108,12 @@ test("作品列表提供作者、点赞和评论聚合字段", async () => {
   assert.equal(typeof works[0].like_count, "number");
   assert.equal(typeof works[0].comment_count, "number");
   assert.equal(typeof works[0].liked_by_current_user, "boolean");
+  assert.equal(
+    typeof works[0].current_version_id,
+    "string",
+    "种子作品应回填真实的 current_version_id",
+  );
+  assert.ok(works[0].current_version_id.length > 0);
 });
 
 test("首页目录 listWorks 是轻量列表，不含正文 content", async () => {
@@ -882,6 +888,62 @@ test("演示服务版本冲突、非作者与缺失修改说明被拒绝", async
       changeSummary: "",
     }),
     /修改说明/,
+  );
+});
+
+test("演示服务恢复路径校验修改说明且非作者被拒", async () => {
+  const service = createDataService({ mode: "demo" });
+  await service.signIn({ studentNumber: "2023123456", password: "wenyuan88" });
+  const created = await service.createWork({
+    title: "恢复路径测试",
+    excerpt: "",
+    category: "散文",
+    content: "正文",
+  });
+  const versions = await service.listWorkVersions(created.id);
+  const sourceVersionId = versions[0].id;
+  // 恢复路径：缺失修改说明
+  await assert.rejects(
+    service.restoreWorkVersion({
+      workId: created.id,
+      sourceVersionId,
+      expectedVersionNumber: 1,
+      changeSummary: "",
+    }),
+    /修改说明/,
+  );
+  // 恢复路径：修改说明超过 200 个字符
+  await assert.rejects(
+    service.restoreWorkVersion({
+      workId: created.id,
+      sourceVersionId,
+      expectedVersionNumber: 1,
+      changeSummary: "改".repeat(201),
+    }),
+    /不能超过 200 个字符/,
+  );
+  // 非作者（白露）不能编辑或恢复他人作品
+  await service.signIn({ studentNumber: "2022111111", password: "reader88" });
+  await assert.rejects(
+    service.createWorkVersion({
+      workId: created.id,
+      expectedVersionNumber: 1,
+      title: "x",
+      excerpt: "",
+      category: "散文",
+      content: "y",
+      changeSummary: "说明",
+    }),
+    /只有作者/,
+  );
+  await assert.rejects(
+    service.restoreWorkVersion({
+      workId: created.id,
+      sourceVersionId,
+      expectedVersionNumber: 1,
+      changeSummary: "说明",
+    }),
+    /只有作者/,
   );
 });
 
