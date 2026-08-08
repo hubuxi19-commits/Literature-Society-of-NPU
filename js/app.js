@@ -1541,6 +1541,12 @@ async function renderWork(workId) {
         element("button", {
           className: "quiet-button",
           type: "button",
+          text: "修改作品",
+          dataset: { action: "edit-work", workId: work.id },
+        }),
+        element("button", {
+          className: "quiet-button",
+          type: "button",
           text: "删除作品",
           dataset: { action: "delete-work", workId: work.id },
         }),
@@ -1767,13 +1773,34 @@ function readDraft() {
   }
 }
 
-function renderWrite() {
+async function renderWrite(options = {}) {
   if (!state.session) {
     renderAuthGate();
     return;
   }
   if (!requireVerifiedWrite("#/write")) return;
-  const draft = readDraft();
+  state.editingWork = null;
+  let draft = readDraft();
+  let editing = null;
+  if (options.workId) {
+    try {
+      editing = await service.getWork(options.workId);
+      const versions = await service.listWorkVersions(options.workId);
+      state.editingWork = {
+        work: editing,
+        latestVersionNumber: versions[0]?.version_number ?? 1,
+      };
+      draft = {
+        title: editing.title,
+        excerpt: editing.excerpt,
+        category: editing.category,
+        content: editing.content,
+      };
+    } catch (error) {
+      showError("作品无法编辑", error.message, true);
+      return;
+    }
+  }
   const shell = element("div", { className: "page-shell writing-shell" });
   const aside = element("aside", { className: "writing-aside" }, [
     element("div", {}, [
@@ -1784,7 +1811,11 @@ function renderWrite() {
     ]),
     element("p", {
       className: "draft-status",
-      text: Object.keys(draft).length ? "已恢复浏览器中的本地草稿" : "草稿会自动保存在本机",
+      text: editing
+        ? "正在修改既有作品"
+        : Object.keys(draft).length
+          ? "已恢复浏览器中的本地草稿"
+          : "草稿会自动保存在本机",
       dataset: { draftStatus: "true" },
     }),
   ]);
@@ -1794,11 +1825,18 @@ function renderWrite() {
   });
   form.append(
     element("div", {}, [
-      element("h1", { text: "写一篇新作" }),
-      element("p", {
-        className: "profile-meta",
-        text: `以笔名“${state.session.profile.pen_name}”发表`,
+      element("h1", {
+        text: editing ? "修改作品" : "写一篇新作",
       }),
+      editing
+        ? element("p", {
+            className: "profile-meta",
+            text: `当前为第 ${state.editingWork.latestVersionNumber} 版 · 以笔名“${state.session.profile.pen_name}”保存`,
+          })
+        : element("p", {
+            className: "profile-meta",
+            text: `以笔名“${state.session.profile.pen_name}”发表`,
+          }),
     ]),
   );
   const titleLabel = element("label", {}, [
@@ -1848,6 +1886,18 @@ function renderWrite() {
     }),
   ]);
   contentLabel.querySelector("textarea").textContent = draft.content ?? "";
+  if (editing) {
+    form.append(
+      element("label", {}, [
+        element("span", { text: "修改说明（必填，1–200 字）" }),
+        element("input", {
+          name: "changeSummary",
+          placeholder: "这版改了什么？例如：补充第三段",
+          attrs: { required: true, maxlength: 200, autocomplete: "off" },
+        }),
+      ]),
+    );
+  }
   const footer = element("div", { className: "form-footer" }, [
     element("span", {
       className: "word-count",
@@ -1857,7 +1907,7 @@ function renderWrite() {
     element("button", {
       className: "primary-button",
       type: "submit",
-      text: "发布作品",
+      text: editing ? "保存新版本" : "发布作品",
     }),
   ]);
   form.append(titleLabel, row, contentLabel, footer);
@@ -2901,6 +2951,9 @@ document.addEventListener("click", async (event) => {
         showToast(error.message);
       }
     }
+  } else if (action === "edit-work") {
+    const workId = trigger.dataset.workId;
+    window.location.hash = `#/works/${encodeURIComponent(workId)}/edit`;
   } else if (action === "delete-work") {
     if (!requireVerifiedWrite(window.location.hash)) return;
     const confirmed = await requestConfirmation(
@@ -2995,30 +3048,42 @@ document.addEventListener("submit", async (event) => {
   } else if (form.id === "writingForm") {
     event.preventDefault();
     if (!requireVerifiedWrite(window.location.hash)) return;
+    const wasEditing = Boolean(state.editingWork);
     const data = new FormData(form);
     const submit = form.querySelector("[type=submit]");
     submit.disabled = true;
-    submit.textContent = "正在发布…";
+    submit.textContent = wasEditing ? "正在保存…" : "正在发布…";
     try {
-      const work = await service.createWork({
-        title: data.get("title"),
-        excerpt: data.get("excerpt"),
-        category: data.get("category"),
-        content: data.get("content"),
-      });
+      const work = wasEditing
+        ? await service.createWorkVersion({
+            workId: state.editingWork.work.id,
+            expectedVersionNumber: state.editingWork.latestVersionNumber,
+            title: data.get("title"),
+            excerpt: data.get("excerpt"),
+            category: data.get("category"),
+            content: data.get("content"),
+            changeSummary: data.get("changeSummary"),
+          })
+        : await service.createWork({
+            title: data.get("title"),
+            excerpt: data.get("excerpt"),
+            category: data.get("category"),
+            content: data.get("content"),
+          });
       localStorage.removeItem(DRAFT_KEY);
+      state.editingWork = null;
       await refreshWorks();
-      showToast("作品已发布。", "success");
+      showToast(wasEditing ? "版本已保存。" : "作品已发布。", "success");
       window.location.hash = `#/works/${encodeURIComponent(work.id)}`;
     } catch (error) {
       if (routeToAccountSecurityIfUnverified(error)) {
         submit.disabled = false;
-        submit.textContent = "发布作品";
+        submit.textContent = wasEditing ? "保存新版本" : "发布作品";
         return;
       }
       showToast(`作品没有发布：${error.message}`);
       submit.disabled = false;
-      submit.textContent = "发布作品";
+      submit.textContent = wasEditing ? "保存新版本" : "发布作品";
     }
   } else if (form.matches("[data-comment-form]")) {
     event.preventDefault();

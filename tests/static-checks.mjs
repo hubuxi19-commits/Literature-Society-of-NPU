@@ -429,3 +429,13 @@ test("前端实现历史版本页、恢复入口与阅读页版本入口", async
   assert.match(app, /恢复此版本/);
   assert.match(app, /change_summary/);
 });
+
+test("写作台支持编辑既有作品并强制填写修改说明", async () => {
+  const app = await readFile(new URL("../js/app.js", import.meta.url), "utf8");
+  assert.match(app, /renderWrite\(\s*\{[\s\S]*?workId/);
+  assert.match(app, /name:\s*"changeSummary"/);
+  assert.match(app, /createWorkVersion\(/);
+  assert.match(app, /修改作品/);
+  assert.match(app, /保存新版本/);
+  assert.match(app, /当前为第\s*[\s\S]*?版|当前版本/);
+});

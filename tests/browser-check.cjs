@@ -263,6 +263,48 @@ async function desktopFlow(browser, browserMessages) {
     "新回复",
   );
 
+  await page.getByRole("button", { name: "修改作品" }).click();
+  await page.waitForURL(/#\/works\/work-night-bus\/edit$/);
+  await page
+    .getByRole("heading", { name: "修改作品", exact: true })
+    .waitFor();
+  const editTitleInput = page.locator('#writingForm [name="title"]');
+  if ((await editTitleInput.inputValue()) !== "末班车经过友谊校区") {
+    throw new Error("编辑台没有预填作品原标题");
+  }
+  const changeSummaryInput = page.locator(
+    '#writingForm [name="changeSummary"]',
+  );
+  await expectVisible(changeSummaryInput, "修改说明输入框");
+  if ((await changeSummaryInput.getAttribute("required")) === null) {
+    throw new Error("修改说明没有标记为必填");
+  }
+  await editTitleInput.fill("末班车经过友谊校区（修订）");
+  await changeSummaryInput.fill("补充第三段");
+  await page.getByRole("button", { name: "保存新版本" }).click();
+  await page.waitForURL(/#\/works\/work-night-bus$/);
+  if (
+    (await page.locator(".reading-title h1").textContent()) !==
+    "末班车经过友谊校区（修订）"
+  ) {
+    throw new Error("保存新版本后阅读页标题没有更新");
+  }
+  await page.locator("#toast").waitFor({ state: "visible" });
+  if ((await page.locator("#toast").textContent()) !== "版本已保存。") {
+    throw new Error("保存新版本后没有出现版本已保存提示");
+  }
+  await goToHash(page, "#/works/work-night-bus/versions", "历史版本");
+  const editedVersionCards = page.locator(".version-card");
+  if ((await editedVersionCards.count()) < 2) {
+    throw new Error("保存新版本后历史版本页没有新增版本");
+  }
+  const editedFirstCardText =
+    (await editedVersionCards.first().textContent()) ?? "";
+  if (!/^第 \d+ 版/.test(editedFirstCardText.trim())) {
+    throw new Error("保存新版本后第一个版本卡片没有版本号");
+  }
+  await goToHash(page, "#/works/work-night-bus", "末班车经过友谊校区（修订）");
+
   await goToHash(page, "#/write", "写一篇新作");
   const writingCategory = page.locator('#writingForm [name="category"]');
   if ((await writingCategory.inputValue()) !== "新诗") {
