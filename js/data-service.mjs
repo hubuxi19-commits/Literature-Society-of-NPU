@@ -48,6 +48,8 @@ function requirePublishableCategory(value) {
 function createDemoService(config = {}) {
   // config.seed 允许测试注入定制的演示数据（如未发布作品）
   const state = clone(config.seed ?? demoSeed);
+  state.workVersions = state.workVersions ?? new Map(); // work_id -> version 数组
+  state.commentQuotes = state.commentQuotes ?? []; // { comment_id, work_id, work_version_id, quote_text, start_offset, end_offset, created_at }
   state.profiles.forEach((profile) => {
     profile.pen_name_changed_at ??= null;
   });
@@ -139,6 +141,8 @@ function createDemoService(config = {}) {
     );
     return {
       ...clone(work),
+      current_version_id: work.current_version_id ?? null,
+      current_version_number: work.current_version_number ?? 1,
       author_pen_name: profile?.pen_name ?? "佚名",
       author_bio: profile?.bio ?? "",
       author_role: profile?.role ?? "member",
@@ -223,6 +227,43 @@ function createDemoService(config = {}) {
         nextStart < rows.length ? encodeCursor(nextStart) : null,
     };
   };
+
+  // 每篇作品懒生成第 1 版快照，并回填作品指针字段
+  const ensureVersion1 = (work) => {
+    if (state.workVersions.has(work.id)) return state.workVersions.get(work.id);
+    const version = {
+      id: makeId("version"),
+      work_id: work.id,
+      version_number: 1,
+      title: work.title,
+      excerpt: work.excerpt,
+      content: work.content,
+      category: work.category,
+      change_summary: "初次发布",
+      restored_from_version_id: null,
+      created_by: work.author_id,
+      created_at: work.created_at,
+    };
+    state.workVersions.set(work.id, [version]);
+    work.current_version_id = version.id;
+    work.current_version_number = 1;
+    return state.workVersions.get(work.id);
+  };
+
+  const nextVersionNumber = (workId) =>
+    (state.workVersions.get(workId) ?? []).reduce(
+      (max, version) => Math.max(max, version.version_number),
+      0,
+    ) + 1;
+
+  // 批注展示串：content 按 /\n\s*\n/ 分段、逐段 trim、去空段、以 \n 连接，
+  // 与前端 renderParagraphs 及 SQL create_quoted_comment 的展示串一致。
+  const displayStringDemo = (content) =>
+    String(content)
+      .split(/\n\s*\n/)
+      .map((paragraph) => paragraph.trim())
+      .filter(Boolean)
+      .join("\n");
 
   const service = {
     mode: "demo",
@@ -341,10 +382,13 @@ function createDemoService(config = {}) {
         category: requirePublishableCategory(input.category),
         status: "published",
         is_featured: false,
+        current_version_id: null,
+        current_version_number: 1,
         created_at: now,
         updated_at: now,
       };
       state.works.push(work);
+      ensureVersion1(work);
       return enrichWork(work);
     },
 
@@ -429,6 +473,183 @@ function createDemoService(config = {}) {
       comment.content = "";
       comment.updated_at = new Date().toISOString();
       return enrichComment(comment);
+    },
+
+    async listWorkVersions(workId) {
+      const work = state.works.find((item) => item.id === workId);
+      if (!work) throw new Error("作品不存在");
+      return ensureVersion1(work).slice().sort(
+        (left, right) => right.version_number - left.version_number,
+      );
+    },
+
+    async createWorkVersion(input) {
+      const current = requireVerifiedSession();
+      const work = state.works.find((item) => item.id === input.workId);
+      if (!work) throw new Error("作品不存在");
+      if (work.author_id !== current.profile.id) {
+        throw new Error("只有作者可以修改自己的作品");
+      }
+      const versions = ensureVersion1(work);
+      const latest = versions[versions.length - 1].version_number;
+      if (
+        input.expectedVersionNumber != null &&
+        input.expectedVersionNumber !== latest
+      ) {
+        throw new Error("作品已被他人修改，请重新载入后重试");
+      }
+      const changeSummary = String(input.changeSummary ?? "").trim();
+      if (!changeSummary) throw new Error("请填写简短修改说明");
+      if (changeSummary.length > 200) throw new Error("修改说明不能超过 200 个字符");
+      const content = requireText(input.content, "正文", 50000);
+      const now = new Date().toISOString();
+      const version = {
+        id: makeId("version"),
+        work_id: work.id,
+        version_number: nextVersionNumber(work.id),
+        title: requireText(input.title, "标题", 80),
+        excerpt:
+          String(input.excerpt ?? "").trim() || createExcerpt(content, 96),
+        content,
+        category: requirePublishableCategory(input.category),
+        change_summary: changeSummary,
+        restored_from_version_id: null,
+        created_by: current.profile.id,
+        created_at: now,
+      };
+      versions.push(version);
+      Object.assign(work, {
+        title: version.title,
+        excerpt: version.excerpt,
+        content: version.content,
+        category: version.category,
+        updated_at: now,
+        current_version_id: version.id,
+        current_version_number: version.version_number,
+      });
+      return enrichWork(work);
+    },
+
+    async restoreWorkVersion(input) {
+      const current = requireVerifiedSession();
+      const work = state.works.find((item) => item.id === input.workId);
+      if (!work) throw new Error("作品不存在");
+      if (work.author_id !== current.profile.id) {
+        throw new Error("只有作者可以修改自己的作品");
+      }
+      const versions = ensureVersion1(work);
+      const source = versions.find(
+        (version) => version.id === input.sourceVersionId,
+      );
+      if (!source) throw new Error("要恢复的版本不存在");
+      const latest = versions[versions.length - 1].version_number;
+      if (
+        input.expectedVersionNumber != null &&
+        input.expectedVersionNumber !== latest
+      ) {
+        throw new Error("作品已被他人修改，请重新载入后重试");
+      }
+      const changeSummary = String(input.changeSummary ?? "").trim();
+      if (!changeSummary) throw new Error("请填写简短修改说明");
+      if (changeSummary.length > 200) throw new Error("修改说明不能超过 200 个字符");
+      const now = new Date().toISOString();
+      const version = {
+        id: makeId("version"),
+        work_id: work.id,
+        version_number: nextVersionNumber(work.id),
+        title: source.title,
+        excerpt: source.excerpt,
+        content: source.content,
+        category: source.category,
+        change_summary: changeSummary,
+        restored_from_version_id: source.id,
+        created_by: current.profile.id,
+        created_at: now,
+      };
+      versions.push(version);
+      Object.assign(work, {
+        title: version.title,
+        excerpt: version.excerpt,
+        content: version.content,
+        category: version.category,
+        updated_at: now,
+        current_version_id: version.id,
+        current_version_number: version.version_number,
+      });
+      return enrichWork(work);
+    },
+
+    async listWorkQuotes(workId) {
+      if (!state.works.some((item) => item.id === workId)) {
+        throw new Error("作品不存在");
+      }
+      return state.commentQuotes
+        .filter((quote) => quote.work_id === workId)
+        .map((quote) => {
+          const comment = state.comments.find(
+            (item) => item.id === quote.comment_id,
+          );
+          const author = comment
+            ? getProfileRecord(comment.user_id)
+            : null;
+          return {
+            ...quote,
+            comment_content: comment?.content ?? "",
+            is_deleted: comment?.is_deleted ?? true,
+            user_id: comment?.user_id ?? null,
+            user_pen_name: author?.pen_name ?? "佚名",
+          };
+        })
+        .sort((left, right) => left.start_offset - right.start_offset);
+    },
+
+    async createQuotedComment(input) {
+      const current = requireVerifiedSession();
+      const work = state.works.find((item) => item.id === input.workId);
+      if (!work) throw new Error("作品不存在");
+      const versions = ensureVersion1(work);
+      const version = versions.find(
+        (item) => item.id === input.workVersionId,
+      );
+      if (!version) throw new Error("批注对应的作品版本不存在");
+      const quoteText = String(input.quoteText ?? "").trim();
+      const display = displayStringDemo(version.content);
+      const start = Number(input.startOffset);
+      const end = Number(input.endOffset);
+      if (
+        quoteText.length < 1 ||
+        quoteText.length > 500 ||
+        !Number.isInteger(start) ||
+        !Number.isInteger(end) ||
+        end <= start ||
+        display.slice(start, end) !== quoteText
+      ) {
+        throw new Error("引用原文与所选位置不符，请重新选择");
+      }
+      const now = new Date().toISOString();
+      const comment = {
+        id: makeId("comment"),
+        work_id: work.id,
+        user_id: current.profile.id,
+        parent_id: null,
+        content: requireText(input.content, "评论", 2000),
+        is_deleted: false,
+        created_at: now,
+        updated_at: now,
+      };
+      state.comments.push(comment);
+      const quote = {
+        id: makeId("quote"),
+        comment_id: comment.id,
+        work_id: work.id,
+        work_version_id: version.id,
+        quote_text: quoteText,
+        start_offset: start,
+        end_offset: end,
+        created_at: now,
+      };
+      state.commentQuotes.push(quote);
+      return { comment: enrichComment(comment), quote };
     },
 
     async getProfile(profileId) {

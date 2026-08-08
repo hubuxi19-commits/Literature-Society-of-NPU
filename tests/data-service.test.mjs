@@ -805,3 +805,119 @@ test("Supabase 首页目录 listWorks 不请求 content 正文", async () => {
     "listWorks 不应请求 content 正文",
   );
 });
+
+test("演示服务记录版本历史、编辑生成新版本且恢复不丢历史", async () => {
+  const service = createDataService({ mode: "demo" });
+  await service.signIn({ studentNumber: "2023123456", password: "wenyuan88" });
+  const created = await service.createWork({
+    title: "初稿",
+    excerpt: "",
+    category: "散文",
+    content: "第一段。\n\n第二段。",
+  });
+  assert.equal(created.current_version_number, 1);
+
+  const versions1 = await service.listWorkVersions(created.id);
+  assert.equal(versions1.length, 1);
+  assert.equal(versions1[0].version_number, 1);
+  assert.equal(versions1[0].change_summary, "初次发布");
+
+  const edited = await service.createWorkVersion({
+    workId: created.id,
+    expectedVersionNumber: 1,
+    title: "初稿·修订",
+    excerpt: "",
+    category: "散文",
+    content: "第一段。\n\n第二段。\n\n第三段。",
+    changeSummary: "补第三段",
+  });
+  assert.equal(edited.current_version_number, 2);
+
+  const versions2 = await service.listWorkVersions(created.id);
+  assert.equal(versions2.length, 2);
+  assert.equal(versions2[0].version_number, 2);
+  assert.doesNotMatch(versions2[1].content, /第三段/, "第 1 版不被覆盖");
+
+  const restored = await service.restoreWorkVersion({
+    workId: created.id,
+    sourceVersionId: versions2[1].id,
+    expectedVersionNumber: 2,
+    changeSummary: "回到初稿",
+  });
+  assert.equal(restored.current_version_number, 3);
+  const versions3 = await service.listWorkVersions(created.id);
+  assert.equal(versions3.length, 3);
+  assert.equal(versions3[0].restored_from_version_id, versions2[1].id);
+});
+
+test("演示服务版本冲突、非作者与缺失修改说明被拒绝", async () => {
+  const service = createDataService({ mode: "demo" });
+  await service.signIn({ studentNumber: "2023123456", password: "wenyuan88" });
+  const created = await service.createWork({
+    title: "冲突测试",
+    excerpt: "",
+    category: "散文",
+    content: "正文",
+  });
+  await assert.rejects(
+    service.createWorkVersion({
+      workId: created.id,
+      expectedVersionNumber: 99,
+      title: "x",
+      excerpt: "",
+      category: "散文",
+      content: "y",
+      changeSummary: "说明",
+    }),
+    /已被他人修改/,
+  );
+  await assert.rejects(
+    service.createWorkVersion({
+      workId: created.id,
+      expectedVersionNumber: 1,
+      title: "x",
+      excerpt: "",
+      category: "散文",
+      content: "y",
+      changeSummary: "",
+    }),
+    /修改说明/,
+  );
+});
+
+test("演示服务批注：保存正确版本原文位置，位置不符被拒", async () => {
+  const service = createDataService({ mode: "demo" });
+  await service.signIn({ studentNumber: "2023123456", password: "wenyuan88" });
+  const created = await service.createWork({
+    title: "批注测试",
+    excerpt: "",
+    category: "散文",
+    content: "第一段。\n\n第二段。",
+  });
+  const versions = await service.listWorkVersions(created.id);
+  const v1 = versions[0];
+  // 展示串 = "第一段。\n第二段。"，"第二段。"位于 [5,9)
+  const result = await service.createQuotedComment({
+    workId: created.id,
+    workVersionId: v1.id,
+    quoteText: "第二段。",
+    startOffset: 5,
+    endOffset: 9,
+    content: "这句写得准。",
+  });
+  assert.equal(result.quote.work_version_id, v1.id);
+  assert.equal(result.comment.content, "这句写得准。");
+  const quotes = await service.listWorkQuotes(created.id);
+  assert.equal(quotes[0].quote_text, "第二段。");
+  await assert.rejects(
+    service.createQuotedComment({
+      workId: created.id,
+      workVersionId: v1.id,
+      quoteText: "伪造原文",
+      startOffset: 0,
+      endOffset: 4,
+      content: "内容",
+    }),
+    /不符/,
+  );
+});
