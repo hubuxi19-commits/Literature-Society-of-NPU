@@ -3245,10 +3245,12 @@ document.addEventListener("input", (event) => {
   }
   if (target.form?.id === "writingForm") {
     const form = target.form;
-    const draft = Object.fromEntries(new FormData(form));
-    localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+    const formData = new FormData(form);
     const counter = form.querySelector("[data-word-count]");
-    counter.textContent = `${countChineseText(draft.content ?? "")} 字`;
+    counter.textContent = `${countChineseText(String(formData.get("content") ?? ""))} 字`;
+    if (state.editingWork) return;
+    const draft = Object.fromEntries(formData);
+    localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
     const status = document.querySelector("[data-draft-status]");
     if (status) status.textContent = "草稿已保存在本机";
   }

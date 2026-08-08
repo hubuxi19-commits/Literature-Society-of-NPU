@@ -305,6 +305,17 @@ async function desktopFlow(browser, browserMessages) {
   }
   await goToHash(page, "#/works/work-night-bus", "末班车经过友谊校区（修订）");
 
+  // 废弃编辑不应把既有作品内容写进新作草稿（编辑模式仅统计字数，不持久化 DRAFT_KEY）
+  await goToHash(page, "#/works/work-night-bus/edit", "修改作品");
+  const abandonedEditTitle = page.locator('#writingForm [name="title"]');
+  await abandonedEditTitle.focus();
+  await page.keyboard.press("End");
+  await page.keyboard.press("X");
+  await goToHash(page, "#/write", "写一篇新作");
+  if ((await page.locator('#writingForm [name="title"]').inputValue()) !== "") {
+    throw new Error("废弃编辑把既有作品内容恢复成了新作草稿");
+  }
+
   await goToHash(page, "#/write", "写一篇新作");
   const writingCategory = page.locator('#writingForm [name="category"]');
   if ((await writingCategory.inputValue()) !== "新诗") {
