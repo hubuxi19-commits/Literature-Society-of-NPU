@@ -57,6 +57,7 @@ const state = {
   settings: null,
   currentWork: null,
   currentExport: null,
+  editingWork: null,
   filters: {
     query: "",
     category: "全部",
@@ -1504,6 +1505,13 @@ async function renderWork(workId) {
     );
     actionBar.append(likeButton);
     actionBar.append(
+      element("a", {
+        className: "secondary-button",
+        href: `#/works/${encodeURIComponent(work.id)}/versions`,
+        text: "查看历史版本",
+      }),
+    );
+    actionBar.append(
       element("button", {
         className: "secondary-button export-work-button",
         type: "button",
@@ -1650,6 +1658,87 @@ async function renderWork(workId) {
     replaceContent(app, shell);
   } catch (error) {
     showError("作品无法打开", error.message, true);
+  }
+}
+
+async function renderWorkVersions(workId) {
+  showLoading("正在打开历史版本");
+  try {
+    const [work, versions] = await Promise.all([
+      service.getWork(workId),
+      service.listWorkVersions(workId),
+    ]);
+    const shell = element("div", { className: "page-shell versions-shell" });
+    shell.append(
+      createPageHeader(
+        "VERSIONS",
+        "历史版本",
+        "每次修改都会留下一个公开版本。恢复旧版本会生成新的最新版本，不会删除任何历史。",
+      ),
+      element("p", { className: "profile-meta" }, [
+        element("span", { text: work.title }),
+        element("span", { text: ` · 共 ${versions.length} 个版本` }),
+        element("a", {
+          className: "inline-link",
+          href: `#/works/${encodeURIComponent(work.id)}`,
+          text: "返回正文",
+        }),
+      ]),
+    );
+    const list = element("ol", { className: "version-list" });
+    versions.forEach((version) => {
+      const item = element("li", { className: "version-card" });
+      const isCurrent = work.current_version_number === version.version_number;
+      item.append(
+        element("div", { className: "version-card-head" }, [
+          element("span", {
+            className: "version-badge",
+            text: `第 ${version.version_number} 版`,
+          }),
+          isCurrent
+            ? element("span", { className: "featured-mark", text: "当前版本" })
+            : null,
+          element("time", {
+            text: formatDate(version.created_at),
+            attrs: { datetime: version.created_at },
+          }),
+        ]),
+        element("p", {
+          className: "version-summary",
+          text: version.change_summary,
+        }),
+        version.restored_from_version_id
+          ? element("p", {
+              className: "profile-meta",
+              text: `由第 ${versions.find((v) => v.id === version.restored_from_version_id)?.version_number ?? "?"} 版恢复而来`,
+            })
+          : null,
+        element("details", { className: "version-body" }, [
+          element("summary", { text: "查看正文快照" }),
+          renderParagraphs(version.content, version.category),
+        ]),
+      );
+      if (userCanManage(work.author_id) && !isCurrent) {
+        item.append(
+          element("button", {
+            className: "quiet-button",
+            type: "button",
+            text: "恢复此版本",
+            dataset: {
+              action: "restore-version",
+              workId: work.id,
+              sourceVersionId: version.id,
+              versionNumber: String(version.version_number),
+            },
+          }),
+        );
+      }
+      list.append(item);
+    });
+    shell.append(list);
+    replaceContent(app, shell);
+  } catch (error) {
+    showError("历史版本无法打开", error.message, true);
   }
 }
 
@@ -2401,6 +2490,8 @@ async function renderCurrentRoute() {
   try {
     if (route.name === "home") renderHome();
     else if (route.name === "work") await renderWork(route.id);
+    else if (route.name === "versions") await renderWorkVersions(route.id);
+    else if (route.name === "editWork") await renderWrite({ workId: route.id });
     else if (route.name === "author") await renderAuthor(route.id);
     else if (route.name === "write") renderWrite();
     else if (route.name === "account-security") await renderAccountSecurity();
@@ -2825,6 +2916,34 @@ document.addEventListener("click", async (event) => {
         if (routeToAccountSecurityIfUnverified(error)) return;
         showToast(error.message);
       }
+    }
+  } else if (action === "restore-version") {
+    const workId = trigger.dataset.workId;
+    const sourceVersionId = trigger.dataset.sourceVersionId;
+    const versionNumber = trigger.dataset.versionNumber;
+    const changeSummary = window.prompt(
+      `恢复到第 ${versionNumber} 版。请填写一句修改说明（必填）：`,
+      `恢复第 ${versionNumber} 版`,
+    );
+    if (changeSummary === null) return;
+    trigger.disabled = true;
+    try {
+      const versions = await service.listWorkVersions(workId);
+      const expected = versions[0]?.version_number ?? null;
+      await service.restoreWorkVersion({
+        workId,
+        sourceVersionId,
+        expectedVersionNumber: expected,
+        changeSummary: String(changeSummary).trim(),
+      });
+      await refreshWorks();
+      showToast("已恢复旧版本。", "success");
+      window.location.hash = `#/works/${encodeURIComponent(workId)}/versions`;
+    } catch (error) {
+      if (routeToAccountSecurityIfUnverified(error)) return;
+      showToast(error.message);
+    } finally {
+      if (trigger.isConnected) trigger.disabled = false;
     }
   } else if (action === "toggle-featured") {
     if (!requireVerifiedWrite(window.location.hash)) return;

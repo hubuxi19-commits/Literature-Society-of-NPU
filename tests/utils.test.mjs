@@ -140,6 +140,19 @@ test("账号安全路由解析为独立路由", () => {
   assert.deepEqual(parseRoute("#/account/"), { name: "not-found" });
 });
 
+test("作品版本与编辑路由解析到对应页面", () => {
+  assert.deepEqual(parseRoute("#/works/w1/versions"), {
+    name: "versions",
+    id: "w1",
+  });
+  assert.deepEqual(parseRoute("#/works/w1/edit"), {
+    name: "editWork",
+    id: "w1",
+  });
+  assert.deepEqual(parseRoute("#/works/w1"), { name: "work", id: "w1" });
+  assert.deepEqual(parseRoute("#/works/w1/other"), { name: "not-found" });
+});
+
 test("作品按关键词、分类和热度过滤排序且不修改输入", () => {
   const works = [
     {

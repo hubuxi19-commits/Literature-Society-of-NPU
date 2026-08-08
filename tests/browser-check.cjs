@@ -197,6 +197,21 @@ async function desktopFlow(browser, browserMessages) {
     throw new Error("新诗没有使用诗歌阅读排版");
   }
   await expectNoHorizontalOverflow(page, "桌面阅读页");
+  const versionsEntry = page.getByRole("link", { name: "查看历史版本" });
+  await expectVisible(versionsEntry, "阅读页历史版本入口");
+  if (
+    (await versionsEntry.getAttribute("href")) !==
+    "#/works/work-night-bus/versions"
+  ) {
+    throw new Error("历史版本入口链接指向错误");
+  }
+  await goToHash(page, "#/works/work-night-bus/versions", "历史版本");
+  const firstVersionCard = page.locator(".version-card").first();
+  await expectVisible(firstVersionCard, "历史版本卡片");
+  if (!(await firstVersionCard.textContent()).includes("第 1 版")) {
+    throw new Error("历史版本页没有展示第 1 版");
+  }
+  await goToHash(page, "#/works/work-night-bus", "末班车经过友谊校区");
   const readingScreenshot = await page.screenshot({ fullPage: true });
 
   await goToHash(page, "#/works/work-library-rain", "雨落在图书馆闭馆以后");

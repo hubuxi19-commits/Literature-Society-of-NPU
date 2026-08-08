@@ -159,6 +159,12 @@ export function parseRoute(hash = "#/") {
   if (parts.length === 2 && parts[0] === "account" && parts[1] === "security") {
     return { name: "account-security" };
   }
+  if (parts.length === 3 && parts[0] === "works" && parts[2] === "versions") {
+    return { name: "versions", id: decodeURIComponent(parts[1]) };
+  }
+  if (parts.length === 3 && parts[0] === "works" && parts[2] === "edit") {
+    return { name: "editWork", id: decodeURIComponent(parts[1]) };
+  }
   return { name: "not-found" };
 }
 
