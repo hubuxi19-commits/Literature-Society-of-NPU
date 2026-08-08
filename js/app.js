@@ -1465,6 +1465,9 @@ function computeQuoteSelection(versionId) {
   const paragraphs = Array.from(body.querySelectorAll("p"));
   const paraIndex = paragraphs.indexOf(anchorPara);
   if (paraIndex < 0) return null;
+  // 展示串是各段落 textContent 去首尾空白后用单个 "\n" 拼接，
+  // 因此每个前置 <p> 累积 textContent.length + 1 的偏移；
+  // 该约定必须与服务器端 create_quoted_comment SQL / displayStringDemo 保持一致。
   let displayOffset = 0;
   for (let i = 0; i < paraIndex; i += 1) {
     displayOffset += paragraphs[i].textContent.length + 1;
@@ -2636,6 +2639,9 @@ function writeHomeScroll(value) {
 }
 
 async function renderCurrentRoute() {
+  // 选区批注浮动按钮挂在 document.body 下，路由重绘不会移除它；
+  // 选中内容随正文被替换而坍缩时 Chrome 并不触发 selectionchange，必须在这里显式隐藏。
+  hideAnnotateButton();
   accountMenu.hidden = true;
   closeProfileEditor();
   siteHeader.dataset.menuOpen = "false";

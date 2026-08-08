@@ -304,6 +304,29 @@ async function desktopFlow(browser, browserMessages) {
     throw new Error(`批注作者没有显示：${quoteItemText}`);
   }
 
+  // 导航离开阅读页时浮动批注按钮应隐藏：选中正文 → 浮动按钮出现 → hash 切换 → 按钮不再可见。
+  await page.evaluate(() => {
+    const body = document.querySelector("[data-annotatable]");
+    if (!body) throw new Error("阅读页缺少可批注正文");
+    const firstPara = body.querySelector("p");
+    const textNode = firstPara?.firstChild;
+    if (!firstPara || !textNode) throw new Error("阅读页正文缺少段落文本节点");
+    const range = document.createRange();
+    range.setStart(textNode, 0);
+    range.setEnd(textNode, 11);
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    firstPara.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+  });
+  const navAnnotateFloat = page.locator(".annotate-float");
+  await expectVisible(navAnnotateFloat, "导航前浮动批注按钮");
+  await goToHash(page, "#/", "让作品被读见");
+  if (!(await navAnnotateFloat.isHidden())) {
+    throw new Error("导航离开阅读页后浮动批注按钮仍可见");
+  }
+  await goToHash(page, "#/works/work-night-bus", "末班车经过友谊校区");
+
   await page.getByRole("button", { name: "修改作品" }).click();
   await page.waitForURL(/#\/works\/work-night-bus\/edit$/);
   await page
