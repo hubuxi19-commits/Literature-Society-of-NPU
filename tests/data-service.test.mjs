@@ -983,3 +983,283 @@ test("演示服务批注：保存正确版本原文位置，位置不符被拒",
     /不符/,
   );
 });
+
+test("Supabase 服务通过 RPC 创建版本、恢复版本并返回版本/批注", async () => {
+  const invoked = [];
+  // 模拟服务端作品行随 RPC 写入推进的当前版本号（create→2、restore→3）
+  let workVersionNumber = 1;
+  const fakeClient = {
+    auth: {
+      getSession: async () => ({
+        data: {
+          session: {
+            user: { id: "u-1", email: "a@x.test" },
+            access_token: "t",
+          },
+        },
+        error: null,
+      }),
+    },
+    from: (table) => ({
+      select: () => ({
+        eq: () => ({
+          single: async () =>
+            table === "works"
+              ? {
+                  data: {
+                    id: "work-1",
+                    author_id: "u-1",
+                    title: "修订",
+                    excerpt: "",
+                    content: "正文",
+                    category: "散文",
+                    status: "published",
+                    is_featured: false,
+                    created_at: new Date().toISOString(),
+                    updated_at: new Date().toISOString(),
+                    current_version_id: `v-${workVersionNumber}`,
+                    work_versions: { version_number: workVersionNumber },
+                    profiles: { pen_name: "松声", bio: "", role: "member" },
+                  },
+                  error: null,
+                }
+              : { data: null, error: null },
+        }),
+        in: async () => ({ data: [], error: null }),
+      }),
+    }),
+    rpc: async (name, args) => {
+      invoked.push([name, args]);
+      if (name === "create_work_version") {
+        workVersionNumber = 2;
+        return {
+          data: {
+            work_id: "work-1",
+            version_id: "v-2",
+            version_number: 2,
+            change_summary: "补第三段",
+            is_new: false,
+          },
+          error: null,
+        };
+      }
+      if (name === "restore_work_version") {
+        workVersionNumber = 3;
+        return {
+          data: {
+            work_id: "work-1",
+            version_id: "v-3",
+            version_number: 3,
+            restored_from_version_id: "v-1",
+            change_summary: "回到初稿",
+          },
+          error: null,
+        };
+      }
+      if (name === "list_work_versions") {
+        return {
+          data: [
+            { id: "v-2", version_number: 2, title: "修订", excerpt: "", content: "正文", category: "散文", change_summary: "补第三段", restored_from_version_id: null, created_by: "u-1", created_at: new Date().toISOString() },
+            { id: "v-1", version_number: 1, title: "初稿", excerpt: "", content: "正文", category: "散文", change_summary: "初次发布", restored_from_version_id: null, created_by: "u-1", created_at: new Date().toISOString() },
+          ],
+          error: null,
+        };
+      }
+      if (name === "create_quoted_comment") {
+        return {
+          data: {
+            comment: { id: "c-1", work_id: "work-1", user_id: "u-2", content: "这句写得准。", is_deleted: false, created_at: new Date().toISOString() },
+            quote: { id: "q-1", work_version_id: "v-1", quote_text: "第二段。", start_offset: 7, end_offset: 11 },
+          },
+          error: null,
+        };
+      }
+      if (name === "list_work_quotes") {
+        return {
+          data: [{ comment_id: "c-1", work_version_id: "v-1", quote_text: "第二段。", start_offset: 7, end_offset: 11, comment_content: "这句写得准。", is_deleted: false, user_id: "u-2", user_pen_name: "白露", created_at: new Date().toISOString() }],
+          error: null,
+        };
+      }
+      return { data: null, error: { message: "unknown" } };
+    },
+  };
+  const service = createDataService({
+    mode: "supabase",
+    supabaseUrl: "https://project.supabase.co",
+    supabasePublishableKey: "sb_publishable_test",
+    clientOverride: fakeClient,
+  });
+
+  const edited = await service.createWorkVersion({
+    workId: "work-1",
+    expectedVersionNumber: 1,
+    title: "修订",
+    excerpt: "",
+    category: "散文",
+    content: "正文",
+    changeSummary: "补第三段",
+  });
+  assert.equal(edited.current_version_number, 2);
+  assert.deepEqual(invoked.at(-1), [
+    "create_work_version",
+    { p_work_id: "work-1", p_expected_version_number: 1, p_title: "修订", p_excerpt: "", p_category: "散文", p_content: "正文", p_change_summary: "补第三段" },
+  ]);
+
+  const restored = await service.restoreWorkVersion({
+    workId: "work-1",
+    sourceVersionId: "v-1",
+    expectedVersionNumber: 2,
+    changeSummary: "回到初稿",
+  });
+  assert.equal(restored.current_version_number, 3);
+  assert.deepEqual(invoked.at(-1), [
+    "restore_work_version",
+    { p_work_id: "work-1", p_source_version_id: "v-1", p_expected_version_number: 2, p_change_summary: "回到初稿" },
+  ]);
+
+  const versions = await service.listWorkVersions("work-1");
+  assert.equal(versions.length, 2);
+  assert.equal(versions[0].version_number, 2);
+
+  const quoted = await service.createQuotedComment({
+    workId: "work-1",
+    workVersionId: "v-1",
+    quoteText: "第二段。",
+    startOffset: 7,
+    endOffset: 11,
+    content: "这句写得准。",
+  });
+  assert.equal(quoted.quote.work_version_id, "v-1");
+  assert.deepEqual(invoked.at(-1), [
+    "create_quoted_comment",
+    { p_work_id: "work-1", p_work_version_id: "v-1", p_quote_text: "第二段。", p_start_offset: 7, p_end_offset: 11, p_content: "这句写得准。" },
+  ]);
+
+  const quotes = await service.listWorkQuotes("work-1");
+  assert.equal(quotes[0].quote_text, "第二段。");
+});
+
+test("Supabase createWork 走 create_work_version RPC（新作品）", async () => {
+  const invoked = [];
+  const fakeClient = {
+    auth: {
+      getSession: async () => ({
+        data: {
+          session: {
+            user: { id: "u-1", email: "a@x.test" },
+            access_token: "t",
+          },
+        },
+        error: null,
+      }),
+    },
+    from: (table) => ({
+      select: () => ({
+        eq: () => ({
+          single: async () =>
+            table === "works"
+              ? {
+                  data: {
+                    id: "work-new",
+                    author_id: "u-1",
+                    title: "新作",
+                    excerpt: "",
+                    content: "正文",
+                    category: "散文",
+                    status: "published",
+                    is_featured: false,
+                    created_at: new Date().toISOString(),
+                    updated_at: new Date().toISOString(),
+                    current_version_id: "v-1",
+                    work_versions: { version_number: 1 },
+                    profiles: { pen_name: "松声", bio: "", role: "member" },
+                  },
+                  error: null,
+                }
+              : { data: null, error: null },
+        }),
+        in: async () => ({ data: [], error: null }),
+      }),
+    }),
+    rpc: async (name, args) => {
+      invoked.push([name, args]);
+      if (name === "create_work_version") {
+        return {
+          data: { work_id: "work-new", version_id: "v-1", version_number: 1, change_summary: "初次发布", is_new: true },
+          error: null,
+        };
+      }
+      if (name === "delete_work") {
+        return { data: null, error: null };
+      }
+      return { data: null, error: { message: "unknown" } };
+    },
+  };
+  const service = createDataService({
+    mode: "supabase",
+    supabaseUrl: "https://project.supabase.co",
+    supabasePublishableKey: "sb_publishable_test",
+    clientOverride: fakeClient,
+  });
+  const work = await service.createWork({
+    title: "新作",
+    excerpt: "",
+    category: "散文",
+    content: "正文",
+  });
+  assert.equal(work.current_version_number, 1);
+  assert.deepEqual(invoked.at(-1), [
+    "create_work_version",
+    { p_work_id: null, p_expected_version_number: null, p_title: "新作", p_excerpt: "正文", p_category: "散文", p_content: "正文", p_change_summary: "" },
+  ]);
+
+  await service.deleteWork(work.id);
+  assert.deepEqual(invoked.at(-1), ["delete_work", { p_work_id: "work-new" }]);
+});
+
+test("Supabase getWork 返回 current_version_number 与作者与评论", async () => {
+  const workRow = {
+    id: "work-1",
+    author_id: "u-1",
+    title: "修订",
+    excerpt: "",
+    content: "正文",
+    category: "散文",
+    status: "published",
+    is_featured: false,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    current_version_id: "v-2",
+    work_versions: { version_number: 2 },
+    profiles: { id: "u-1", pen_name: "松声", bio: "", role: "member", created_at: new Date().toISOString() },
+  };
+  const fakeClient = {
+    auth: {
+      getSession: async () => ({ data: { session: null }, error: null }),
+    },
+    from: (table) => ({
+      select: () => {
+        const chain = {
+          eq: () => chain,
+          in: async () => ({ data: [], error: null }),
+          order: async () => ({ data: [], error: null }),
+          single: async () =>
+            table === "works"
+              ? { data: workRow, error: null }
+              : { data: null, error: null },
+        };
+        return chain;
+      },
+    }),
+  };
+  const service = createDataService({
+    mode: "supabase",
+    supabaseUrl: "https://project.supabase.co",
+    supabasePublishableKey: "sb_publishable_test",
+    clientOverride: fakeClient,
+  });
+  const work = await service.getWork("work-1");
+  assert.equal(work.current_version_number, 2);
+  assert.equal(work.author_pen_name, "松声");
+  assert.deepEqual(work.comments, []);
+});

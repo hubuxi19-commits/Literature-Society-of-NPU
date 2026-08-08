@@ -938,6 +938,21 @@ function createSupabaseService(config) {
     }));
   };
 
+  const fetchWorkById = async (client, workId) => {
+    const { data, error } = await client
+      .from("works")
+      .select(
+        "*, profiles!works_author_id_fkey(id,pen_name,bio,role,created_at), work_versions!works_current_version_id_fkey(version_number)",
+      )
+      .eq("id", workId)
+      .single();
+    if (error) throw new Error(error.code === "PGRST116" ? "作品不存在" : error.message);
+    const [enriched] = await enrichRemoteWorks(client, [data]);
+    enriched.current_version_number =
+      data.work_versions?.version_number ?? null;
+    return enriched;
+  };
+
   const listWorksPageRemote = async (options = {}) => {
     const client = await getClient();
     const { data, error } = await client.rpc("browse_works", {
@@ -1067,12 +1082,14 @@ function createSupabaseService(config) {
       const client = await getClient();
       const { data: work, error } = await client
         .from("works")
-        .select("*, profiles!works_author_id_fkey(id,pen_name,bio,role,created_at)")
+        .select("*, profiles!works_author_id_fkey(id,pen_name,bio,role,created_at), work_versions!works_current_version_id_fkey(version_number)")
         .eq("id", workId)
         .eq("status", "published")
         .single();
       if (error) throw new Error(error.code === "PGRST116" ? "作品不存在" : error.message);
       const [enriched] = await enrichRemoteWorks(client, [work]);
+      enriched.current_version_number =
+        work.work_versions?.version_number ?? null;
       const { data: comments, error: commentsError } = await client
         .from("comments")
         .select("*, profiles!comments_user_id_fkey(pen_name,role)")
@@ -1091,30 +1108,89 @@ function createSupabaseService(config) {
     },
 
     async createWork(input) {
-      const current = await requireRemoteSession();
+      await requireRemoteSession();
       const content = requireText(input.content, "正文", 50000);
       const client = await getClient();
-      const { data, error } = await client
-        .from("works")
-        .insert({
-          author_id: current.profile.id,
-          title: requireText(input.title, "标题", 80),
-          excerpt:
-            String(input.excerpt ?? "").trim() || createExcerpt(content, 96),
-          content,
-          category: requirePublishableCategory(input.category),
-        })
-        .select("*, profiles!works_author_id_fkey(pen_name,bio,role)")
-        .single();
+      const { data, error } = await client.rpc("create_work_version", {
+        p_work_id: null,
+        p_expected_version_number: null,
+        p_title: requireText(input.title, "标题", 80),
+        p_excerpt:
+          String(input.excerpt ?? "").trim() || createExcerpt(content, 96),
+        p_category: requirePublishableCategory(input.category),
+        p_content: content,
+        p_change_summary: "",
+      });
       if (error) throw new Error(error.message);
-      const [work] = await enrichRemoteWorks(client, [data]);
-      return work;
+      return fetchWorkById(client, data.work_id);
+    },
+
+    async createWorkVersion(input) {
+      await requireRemoteSession();
+      const client = await getClient();
+      const { data, error } = await client.rpc("create_work_version", {
+        p_work_id: input.workId,
+        p_expected_version_number: input.expectedVersionNumber ?? null,
+        p_title: input.title,
+        p_excerpt: input.excerpt ?? "",
+        p_category: input.category,
+        p_content: input.content,
+        p_change_summary: input.changeSummary ?? "",
+      });
+      if (error) throw new Error(error.message);
+      return fetchWorkById(client, data.work_id);
+    },
+
+    async restoreWorkVersion(input) {
+      await requireRemoteSession();
+      const client = await getClient();
+      const { data, error } = await client.rpc("restore_work_version", {
+        p_work_id: input.workId,
+        p_source_version_id: input.sourceVersionId,
+        p_expected_version_number: input.expectedVersionNumber ?? null,
+        p_change_summary: input.changeSummary ?? "",
+      });
+      if (error) throw new Error(error.message);
+      return fetchWorkById(client, data.work_id);
+    },
+
+    async listWorkVersions(workId) {
+      const client = await getClient();
+      const { data, error } = await client.rpc("list_work_versions", {
+        p_work_id: workId,
+      });
+      if (error) throw new Error(error.message);
+      return Array.isArray(data) ? data : [];
+    },
+
+    async createQuotedComment(input) {
+      await requireRemoteSession();
+      const client = await getClient();
+      const { data, error } = await client.rpc("create_quoted_comment", {
+        p_work_id: input.workId,
+        p_work_version_id: input.workVersionId,
+        p_quote_text: input.quoteText,
+        p_start_offset: input.startOffset,
+        p_end_offset: input.endOffset,
+        p_content: input.content,
+      });
+      if (error) throw new Error(error.message);
+      return data;
+    },
+
+    async listWorkQuotes(workId) {
+      const client = await getClient();
+      const { data, error } = await client.rpc("list_work_quotes", {
+        p_work_id: workId,
+      });
+      if (error) throw new Error(error.message);
+      return Array.isArray(data) ? data : [];
     },
 
     async deleteWork(workId) {
       await requireRemoteSession();
       const client = await getClient();
-      const { error } = await client.from("works").delete().eq("id", workId);
+      const { error } = await client.rpc("delete_work", { p_work_id: workId });
       if (error) throw new Error(error.message);
     },
 
