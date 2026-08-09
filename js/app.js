@@ -1506,7 +1506,7 @@ function paragraphDisplayOffset(paragraph, body) {
 // 把选区容器节点 + 偏移换算为段落 textContent 内的码点偏移。
 // 正文段落被 .annotate-unit span 包裹后，anchorNode/focusNode 常是 span 内的文本节点，
 // selection.anchorOffset/focusOffset 相对该节点而非段落；用 Range 从段首量到该位置。
-// 该方式同时正确处理容器为元素（选区起点在段首时 anchorNode 是 <p>）的情况。
+// 该方式同样正确处理容器为元素的情况（如选区恰好跨到 span 整体时 anchorNode 是 span）。
 function selectionToCodePointOffset(container, offset, paragraph) {
   const range = document.createRange();
   range.setStart(paragraph, 0);
@@ -1539,10 +1539,11 @@ function computeQuoteSelection(versionId) {
   const start = Math.min(startCp, endCp);
   const end = Math.max(startCp, endCp);
   if (end <= start) return null;
+  const paragraphOffset = paragraphDisplayOffset(anchorPara, body);
   return {
     quoteText: codepointSlice(text, start, end),
-    startOffset: paragraphDisplayOffset(anchorPara, body) + start,
-    endOffset: paragraphDisplayOffset(anchorPara, body) + end,
+    startOffset: paragraphOffset + start,
+    endOffset: paragraphOffset + end,
     versionId,
   };
 }
@@ -2751,6 +2752,7 @@ async function renderCurrentRoute() {
   // 选中内容随正文被替换而坍缩时 Chrome 并不触发 selectionchange，必须在这里显式隐藏。
   hideAnnotateButton();
   setAnnotateMode(false);
+  if (annotateDialog.open) annotateDialog.close();
   accountMenu.hidden = true;
   closeProfileEditor();
   siteHeader.dataset.menuOpen = "false";
