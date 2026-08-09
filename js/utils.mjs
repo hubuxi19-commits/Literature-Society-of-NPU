@@ -259,7 +259,10 @@ export function splitDisplayParagraphs(content) {
 }
 
 // 引用单位切分：新诗按行、旧诗按标点（换行也算分隔）、散文按句末标点。
-// 返回 [{ text, start, end }]：start/end 为段落内码点偏移，text 为去首尾 ASCII 空格后的引文。
+// 返回 [{ text, start, end }]：start/end 为段落内码点偏移，text 为去首尾空白后的引文。
+// 单位首尾空白与 SQL btrim 的字符集一致（ASCII 空格、\t\r\n\v\f），不裁 NBSP/全角空格：
+// 散文段内的单个换行会落在单位首尾，若不裁掉，SQL 的 btrim(quote_text) 与 substr(展示串)
+// 会因换行不对齐而判「引用原文与所选位置不符」。
 export function splitQuoteUnits(paragraphText, category) {
   const chars = Array.from(String(paragraphText ?? ""));
   const isDelimiter = quoteUnitDelimiter(category);
@@ -286,11 +289,14 @@ function quoteUnitDelimiter(category) {
 function pushQuoteUnit(units, chars, rawStart, rawEnd) {
   let start = rawStart;
   let end = rawEnd;
-  while (start < end && chars[start] === " ") start += 1;
-  while (end > start && chars[end - 1] === " ") end -= 1;
+  while (start < end && QUOTE_EDGE_TRIM.includes(chars[start])) start += 1;
+  while (end > start && QUOTE_EDGE_TRIM.includes(chars[end - 1])) end -= 1;
   if (end <= start) return;
   units.push({ text: chars.slice(start, end).join(""), start, end });
 }
+
+// 与 SQL btrim 默认字符集一致：仅 ASCII 空白，不含 NBSP/全角空格。
+const QUOTE_EDGE_TRIM = " \t\r\n\v\f";
 
 // 与 SQL btrim(string) 的默认行为一致：仅去首尾 ASCII 空格。
 // 刻意不裁 NBSP/全角空格/换行等，避免与 SQL 存入正文的规范化产生差异。

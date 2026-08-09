@@ -327,3 +327,23 @@ test("引用单位：段落内单位与间隔无缝覆盖且与码点切片一�
     assert.equal(trimAsciiSpaces(unit.text), unit.text, "单位应已裁首尾 ASCII 空格");
   }
 });
+
+test("引用单位：散文段内换行裁在单位首尾且偏移与切片一致", () => {
+  // 段内单个换行（非空行）会落在句末标点切出的单位首尾；
+  // 若带入引文，SQL btrim(quote_text) 会剥掉换行而 substr(展示串) 不会，导致判定不符。
+  const units = splitQuoteUnits("风先下了车。\n没有人说话！", "散文");
+  assert.deepEqual(units, [
+    { text: "风先下了车", start: 0, end: 5 },
+    { text: "没有人说话", start: 7, end: 12 },
+  ]);
+  const paragraph = "风先下了车。\n没有人说话！";
+  for (const unit of units) {
+    assert.equal(codepointSlice(paragraph, unit.start, unit.end), unit.text);
+  }
+});
+
+test("引用单位：散文句中换行保留在引文内且与切片一致", () => {
+  // 句中换行不裁，两侧偏移仍指向展示串的准确切片（SQL btrim 不剥内部空白）。
+  const units = splitQuoteUnits("风先\n下车了。", "散文");
+  assert.deepEqual(units, [{ text: "风先\n下车了", start: 0, end: 6 }]);
+});
