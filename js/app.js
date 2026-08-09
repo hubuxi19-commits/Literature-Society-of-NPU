@@ -13,7 +13,6 @@ import {
 import {
   buildCommentTree,
   CATEGORIES,
-  codepointIndexFromUtf16,
   codepointLength,
   codepointSlice,
   countChineseText,
@@ -27,6 +26,7 @@ import {
   parseRoute,
   PUBLISHABLE_CATEGORIES,
   splitDisplayParagraphs,
+  splitQuoteUnits,
   validatePassword,
   validateStudentNumber,
 } from "./utils.mjs";
@@ -46,6 +46,10 @@ const profileLink = document.querySelector("#profileLink");
 const mobileProfileLink = document.querySelector("#mobileProfileLink");
 const demoRibbon = document.querySelector("#demoRibbon");
 const toast = document.querySelector("#toast");
+const annotateDialog = document.querySelector("#annotateDialog");
+const annotateQuoteText = document.querySelector("#annotateQuoteText");
+const annotateContent = document.querySelector("#annotateContent");
+const annotateFormMessage = document.querySelector("[data-annotate-message]");
 
 const DRAFT_KEY = "wenyuan-writing-draft";
 const PROFILE_RETURN_SENTINEL = "__current-profile__";
@@ -1330,6 +1334,41 @@ function renderParagraphs(content, category) {
   return body;
 }
 
+function renderAnnotatableBody(content, category) {
+  const isPoetry = isPoetryCategory(category);
+  const body = element("article", {
+    className: `reading-body ${
+      isPoetry ? "reading-body--poetry" : "reading-body--prose"
+    }`,
+  });
+  splitDisplayParagraphs(content).forEach((paragraph) => {
+    body.append(renderParagraphWithUnits(paragraph, category));
+  });
+  return body;
+}
+
+function renderParagraphWithUnits(paragraph, category) {
+  const p = document.createElement("p");
+  const chars = Array.from(paragraph);
+  let cursor = 0;
+  splitQuoteUnits(paragraph, category).forEach((unit) => {
+    if (unit.start > cursor) {
+      p.append(document.createTextNode(chars.slice(cursor, unit.start).join("")));
+    }
+    const span = element("span", {
+      className: "annotate-unit",
+      dataset: { action: "annotate-unit", start: unit.start, end: unit.end },
+    });
+    span.textContent = unit.text;
+    p.append(span);
+    cursor = unit.end;
+  });
+  if (cursor < chars.length) {
+    p.append(document.createTextNode(chars.slice(cursor).join("")));
+  }
+  return p;
+}
+
 function userCanManage(authorId) {
   return Boolean(
     state.session &&
@@ -1451,6 +1490,29 @@ function createCommentItem(comment, workId, depth = 0) {
 
 let annotateButton = null;
 let annotateMode = false;
+let pendingAnnotation = null;
+
+// 返回段落相对其所在可批注正文的展示串码点偏移（每个前置段落长度 + 1 个 \n）。
+function paragraphDisplayOffset(paragraph, body) {
+  const paragraphs = Array.from(body.querySelectorAll("p"));
+  let offset = 0;
+  for (const p of paragraphs) {
+    if (p === paragraph) return offset;
+    offset += codepointLength(p.textContent) + 1;
+  }
+  return offset;
+}
+
+// 把选区容器节点 + 偏移换算为段落 textContent 内的码点偏移。
+// 正文段落被 .annotate-unit span 包裹后，anchorNode/focusNode 常是 span 内的文本节点，
+// selection.anchorOffset/focusOffset 相对该节点而非段落；用 Range 从段首量到该位置。
+// 该方式同时正确处理容器为元素（选区起点在段首时 anchorNode 是 <p>）的情况。
+function selectionToCodePointOffset(container, offset, paragraph) {
+  const range = document.createRange();
+  range.setStart(paragraph, 0);
+  range.setEnd(container, offset);
+  return codepointLength(range.toString());
+}
 
 function computeQuoteSelection(versionId) {
   const selection = window.getSelection();
@@ -1463,27 +1525,24 @@ function computeQuoteSelection(versionId) {
     return { error: "请在同一段落内选择连续文字" };
   }
   if (!body.contains(anchorPara)) return null;
-  const paragraphs = Array.from(body.querySelectorAll("p"));
-  const paraIndex = paragraphs.indexOf(anchorPara);
-  if (paraIndex < 0) return null;
-  // 展示串是各段落 textContent 去首尾空白后用单个 "\n" 拼接，
-  // 因此每个前置 <p> 累积 codepointLength + 1 的偏移；
-  // 偏移按码点计算（与 SQL char_length/substr 一致），emoji 占 1 个码点。
-  let displayOffset = 0;
-  for (let i = 0; i < paraIndex; i += 1) {
-    displayOffset += codepointLength(paragraphs[i].textContent) + 1;
-  }
   const text = anchorPara.textContent;
-  // selection.anchorOffset/focusOffset 是 UTF-16 偏移，需换算为码点偏移。
-  const startUtf16 = Math.min(selection.anchorOffset, selection.focusOffset);
-  const endUtf16 = Math.max(selection.anchorOffset, selection.focusOffset);
-  if (endUtf16 <= startUtf16) return null;
-  const start = codepointIndexFromUtf16(text, startUtf16);
-  const end = codepointIndexFromUtf16(text, endUtf16);
+  const startCp = selectionToCodePointOffset(
+    selection.anchorNode,
+    selection.anchorOffset,
+    anchorPara,
+  );
+  const endCp = selectionToCodePointOffset(
+    selection.focusNode,
+    selection.focusOffset,
+    anchorPara,
+  );
+  const start = Math.min(startCp, endCp);
+  const end = Math.max(startCp, endCp);
+  if (end <= start) return null;
   return {
     quoteText: codepointSlice(text, start, end),
-    startOffset: displayOffset + start,
-    endOffset: displayOffset + end,
+    startOffset: paragraphDisplayOffset(anchorPara, body) + start,
+    endOffset: paragraphDisplayOffset(anchorPara, body) + end,
     versionId,
   };
 }
@@ -1518,51 +1577,37 @@ function hideAnnotateButton() {
   if (annotateButton) annotateButton.hidden = true;
 }
 
-async function openAnnotation(selection, body) {
-  const content = window.prompt("写下这条批注（1–2000 字）：");
-  if (content === null) return;
-  const text = String(content).trim();
-  if (!text) return;
-  try {
-    await service.createQuotedComment({
-      workId: body.dataset.workId,
-      workVersionId: selection.versionId || body.dataset.versionId,
-      quoteText: selection.quoteText,
-      startOffset: selection.startOffset,
-      endOffset: selection.endOffset,
-      content: text,
-    });
-    showToast("批注已发表。", "success");
+function setAnnotateMode(active) {
+  annotateMode = active;
+  const entry = document.querySelector("[data-action='annotate-mode']");
+  if (entry) entry.textContent = active ? "取消批注" : "添加批注";
+  const body = document.querySelector("[data-annotatable]");
+  if (active) {
+    body?.classList.add("annotating");
+    showToast("点一下要批注的句子或诗行");
+  } else {
+    body?.classList.remove("annotating");
     hideAnnotateButton();
-    await renderWork(body.dataset.workId);
-  } catch (error) {
-    if (routeToAccountSecurityIfUnverified(error)) return;
-    showToast(error.message);
   }
 }
 
-// 选择模式：移动端点「添加批注」后，选中句子松手即直接进入批注输入，
-// 不再依赖桌面端 mouseup 唤出浮动按钮。
-function commitAnnotationFromSelection() {
-  const body = document.querySelector("[data-annotatable]");
-  if (!body) return;
-  const selection = computeQuoteSelection(body.dataset.versionId);
-  if (!selection) return;
-  if (selection.error) {
-    showToast(selection.error);
-    return;
-  }
-  annotateMode = false;
-  const entry = document.querySelector("[data-action='annotate-mode']");
-  if (entry) entry.textContent = "添加批注";
-  openAnnotation(selection, body);
+function openAnnotation(selection, body) {
+  pendingAnnotation = {
+    workId: body.dataset.workId,
+    workVersionId: selection.versionId || body.dataset.versionId,
+    quoteText: selection.quoteText,
+    startOffset: selection.startOffset,
+    endOffset: selection.endOffset,
+  };
+  annotateQuoteText.textContent = `“${selection.quoteText}”`;
+  annotateContent.value = "";
+  annotateFormMessage.textContent = "";
+  if (!annotateDialog.open) annotateDialog.showModal();
+  annotateContent.focus();
 }
 
 function handleSelection(event) {
-  if (annotateMode) {
-    commitAnnotationFromSelection();
-    return;
-  }
+  if (annotateMode) return;
   showAnnotateButton(event);
 }
 
@@ -1822,7 +1867,7 @@ async function renderWork(workId) {
     shell.append(
       head,
       (() => {
-        const body = renderParagraphs(work.content, work.category);
+        const body = renderAnnotatableBody(work.content, work.category);
         body.dataset.workId = work.id;
         body.dataset.versionId = work.current_version_id ?? "";
         body.dataset.annotatable = "";
@@ -2705,7 +2750,7 @@ async function renderCurrentRoute() {
   // 选区批注浮动按钮挂在 document.body 下，路由重绘不会移除它；
   // 选中内容随正文被替换而坍缩时 Chrome 并不触发 selectionchange，必须在这里显式隐藏。
   hideAnnotateButton();
-  annotateMode = false;
+  setAnnotateMode(false);
   accountMenu.hidden = true;
   closeProfileEditor();
   siteHeader.dataset.menuOpen = "false";
@@ -2829,6 +2874,9 @@ async function initialize() {
   document.addEventListener("selectionchange", () => {
     if (!window.getSelection()?.isCollapsed) return;
     hideAnnotateButton();
+  });
+  annotateDialog.addEventListener("close", () => {
+    pendingAnnotation = null;
   });
   try {
     const saved = readHomeSession();
@@ -3191,20 +3239,31 @@ document.addEventListener("click", async (event) => {
       if (trigger.isConnected) trigger.disabled = false;
     }
   } else if (action === "annotate-mode") {
-    annotateMode = !annotateMode;
-    trigger.textContent = annotateMode ? "取消批注" : "添加批注";
-    if (annotateMode) {
-      showToast("请在正文中选中要批注的句子");
-    } else {
-      hideAnnotateButton();
-    }
+    setAnnotateMode(!annotateMode);
   } else if (action === "open-annotation") {
     const raw = trigger.dataset.selection;
     if (!raw) return;
     const selection = JSON.parse(raw);
     const body = document.querySelector("[data-annotatable]");
     if (!body) return;
-    await openAnnotation(selection, body);
+    openAnnotation(selection, body);
+  } else if (action === "annotate-unit") {
+    if (!annotateMode) return;
+    const paragraph = trigger.closest("p");
+    const body = document.querySelector("[data-annotatable]");
+    if (!body || !paragraph || !body.contains(paragraph)) return;
+    openAnnotation(
+      {
+        quoteText: trigger.textContent,
+        startOffset:
+          paragraphDisplayOffset(paragraph, body) + Number(trigger.dataset.start),
+        endOffset: paragraphDisplayOffset(paragraph, body) + Number(trigger.dataset.end),
+        versionId: body.dataset.versionId,
+      },
+      body,
+    );
+  } else if (action === "close-annotate") {
+    annotateDialog.close();
   } else if (action === "toggle-featured") {
     if (!requireVerifiedWrite(window.location.hash)) return;
     const workId = trigger.dataset.workId;
@@ -3247,6 +3306,37 @@ document.addEventListener("submit", async (event) => {
     setFilters({
       query: String(data.get("query") ?? "").trim(),
     });
+  } else if (form.id === "annotateForm") {
+    event.preventDefault();
+    const content = String(new FormData(form).get("content") ?? "").trim();
+    if (!content) {
+      annotateFormMessage.textContent = "批注不能为空。";
+      return;
+    }
+    const workId = pendingAnnotation?.workId;
+    if (!workId) return;
+    const submit = form.querySelector('button[type="submit"]');
+    if (submit) submit.disabled = true;
+    try {
+      await service.createQuotedComment({
+        workId,
+        workVersionId: pendingAnnotation.workVersionId,
+        quoteText: pendingAnnotation.quoteText,
+        startOffset: pendingAnnotation.startOffset,
+        endOffset: pendingAnnotation.endOffset,
+        content,
+      });
+      annotateDialog.close();
+      pendingAnnotation = null;
+      setAnnotateMode(false);
+      showToast("批注已发表。", "success");
+      await renderWork(workId);
+    } catch (error) {
+      if (routeToAccountSecurityIfUnverified(error)) return;
+      annotateFormMessage.textContent = error.message;
+    } finally {
+      if (submit) submit.disabled = false;
+    }
   } else if (form.id === "writingForm") {
     event.preventDefault();
     if (!requireVerifiedWrite(window.location.hash)) return;
