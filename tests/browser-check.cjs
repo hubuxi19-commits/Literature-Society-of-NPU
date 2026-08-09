@@ -263,11 +263,12 @@ async function desktopFlow(browser, browserMessages) {
     "新回复",
   );
 
-  // 选区批注：选中正文第一个可批注单位，浮动入口出现，写作框提交后批注计数 +1 且原文与正文一致。
+  // 选区批注：选中第二段首行「末班车里没有人说话」，浮动入口出现，写作框提交后批注计数 +1 且原文与正文一致。
+  // 第二段相对展示串的首行偏移为 42（第一段 41 码点 + 1 个 \n），同时覆盖 paragraphDisplayOffset 的跨段累加。
   await page.evaluate(() => {
     const body = document.querySelector("[data-annotatable]");
     if (!body) throw new Error("阅读页缺少可批注正文");
-    const unit = body.querySelector(".annotate-unit");
+    const unit = body.querySelectorAll("p")[1]?.querySelector(".annotate-unit");
     const textNode = unit?.firstChild;
     if (!unit || !textNode) throw new Error("阅读页正文缺少可批注句子");
     const range = document.createRange();
@@ -284,8 +285,15 @@ async function desktopFlow(browser, browserMessages) {
     const stored = JSON.parse(button.dataset.selection);
     return stored.quoteText;
   });
-  if (annotateQuoteText !== "车窗把夜色裁成一格一格") {
+  if (annotateQuoteText !== "末班车里没有人说话") {
     throw new Error(`批注引用原文与所选文字不符：${annotateQuoteText}`);
+  }
+  const annotateStartOffset = await annotateFloat.evaluate((button) => {
+    const stored = JSON.parse(button.dataset.selection);
+    return stored.startOffset;
+  });
+  if (annotateStartOffset !== 42) {
+    throw new Error(`批注引用偏移与展示串不符：${annotateStartOffset}，期望 42`);
   }
   // 浮动按钮 → 写作框 → 填写并发表（不再使用系统 prompt）。
   await page.evaluate(() => document.querySelector(".annotate-float").click());

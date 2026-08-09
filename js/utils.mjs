@@ -260,9 +260,9 @@ export function splitDisplayParagraphs(content) {
 
 // 引用单位切分：新诗按行、旧诗按标点（换行也算分隔）、散文按句末标点。
 // 返回 [{ text, start, end }]：start/end 为段落内码点偏移，text 为去首尾空白后的引文。
-// 单位首尾空白与 SQL btrim 的字符集一致（ASCII 空格、\t\r\n\v\f），不裁 NBSP/全角空格：
-// 散文段内的单个换行会落在单位首尾，若不裁掉，SQL 的 btrim(quote_text) 与 substr(展示串)
-// 会因换行不对齐而判「引用原文与所选位置不符」。
+// 单位首尾裁掉 ` \t\r\n\v\f`（与 SQL 构造展示串时逐段 btrim 的边缘字符集一致，不含 NBSP/全角空格），
+// 使散文段内的单个换行不进入引文——引文应是一句干净的话；偏移始终指向展示串的准确切片，
+// 与 SQL 的 btrim(quote_text)（默认仅裁 ASCII 空格）和 substr(展示串) 校验保持一致。
 export function splitQuoteUnits(paragraphText, category) {
   const chars = Array.from(String(paragraphText ?? ""));
   const isDelimiter = quoteUnitDelimiter(category);
