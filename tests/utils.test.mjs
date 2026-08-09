@@ -20,6 +20,7 @@ import {
   normalizeCategory,
   isPoetryCategory,
   splitDisplayParagraphs,
+  splitQuoteUnits,
   codepointLength,
   codepointSlice,
   codepointIndexFromUtf16,
@@ -266,4 +267,63 @@ test("码点辅助：UTF-16 偏移换算为码点索引", () => {
   assert.equal(codepointIndexFromUtf16(text, 3), 2);
   assert.equal(codepointIndexFromUtf16(text, 4), 3);
   assert.equal(codepointIndexFromUtf16(text, 5), 4);
+});
+
+test("引用单位：新诗按行切分并裁剪行首尾空格", () => {
+  const units = splitQuoteUnits(
+    "车窗把夜色裁成一格一格\n  路灯缓慢退去  \n像有人合上书",
+    "新诗",
+  );
+  assert.deepEqual(units, [
+    { text: "车窗把夜色裁成一格一格", start: 0, end: 11 },
+    { text: "路灯缓慢退去", start: 14, end: 20 },
+    { text: "像有人合上书", start: 23, end: 29 },
+  ]);
+});
+
+test("引用单位：旧诗按标点切分且换行同样作为分隔", () => {
+  const units = splitQuoteUnits("国破山河在，\n城春草木深。", "旧诗");
+  assert.deepEqual(units, [
+    { text: "国破山河在", start: 0, end: 5 },
+    { text: "城春草木深", start: 7, end: 12 },
+  ]);
+});
+
+test("引用单位：旧诗无标点时退化为按行", () => {
+  const units = splitQuoteUnits("床前明月光\n疑是地上霜", "旧诗");
+  assert.deepEqual(units, [
+    { text: "床前明月光", start: 0, end: 5 },
+    { text: "疑是地上霜", start: 6, end: 11 },
+  ]);
+});
+
+test("引用单位：散文按句末标点切分且引文不含标点", () => {
+  const units = splitQuoteUnits("风先下了车。没有人说话！真的吗…就这样", "散文");
+  assert.deepEqual(units, [
+    { text: "风先下了车", start: 0, end: 5 },
+    { text: "没有人说话", start: 6, end: 11 },
+    { text: "真的吗", start: 12, end: 15 },
+    { text: "就这样", start: 16, end: 19 },
+  ]);
+});
+
+test("引用单位：偏移按码点计算，emoji 占一位", () => {
+  const units = splitQuoteUnits("😀你好。再见", "散文");
+  assert.deepEqual(units, [
+    { text: "😀你好", start: 0, end: 3 },
+    { text: "再见", start: 4, end: 6 },
+  ]);
+});
+
+test("引用单位：段落内单位与间隔无缝覆盖且与码点切片一致", () => {
+  const paragraph = "第一句。第二句！\n第三句";
+  const units = splitQuoteUnits(paragraph, "散文");
+  assert.ok(units.length >= 2, "应切出多个单位");
+  for (const unit of units) {
+    assert.equal(codepointSlice(paragraph, unit.start, unit.end), unit.text);
+    assert.ok(unit.start >= 0);
+    assert.ok(unit.end <= codepointLength(paragraph));
+    assert.ok(unit.end > unit.start);
+    assert.equal(trimAsciiSpaces(unit.text), unit.text, "单位应已裁首尾 ASCII 空格");
+  }
 });

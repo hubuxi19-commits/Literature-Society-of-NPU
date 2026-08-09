@@ -258,6 +258,40 @@ export function splitDisplayParagraphs(content) {
     .filter(Boolean);
 }
 
+// 引用单位切分：新诗按行、旧诗按标点（换行也算分隔）、散文按句末标点。
+// 返回 [{ text, start, end }]：start/end 为段落内码点偏移，text 为去首尾 ASCII 空格后的引文。
+export function splitQuoteUnits(paragraphText, category) {
+  const chars = Array.from(String(paragraphText ?? ""));
+  const isDelimiter = quoteUnitDelimiter(category);
+  const units = [];
+  let segStart = 0;
+  for (let i = 0; i < chars.length; i += 1) {
+    if (isDelimiter(chars[i])) {
+      pushQuoteUnit(units, chars, segStart, i);
+      segStart = i + 1;
+    }
+  }
+  pushQuoteUnit(units, chars, segStart, chars.length);
+  return units;
+}
+
+function quoteUnitDelimiter(category) {
+  if (category === "旧诗") {
+    return (ch) => ch === "\n" || "。，；：！？…".includes(ch);
+  }
+  if (isPoetryCategory(category)) return (ch) => ch === "\n";
+  return (ch) => "。！？…".includes(ch);
+}
+
+function pushQuoteUnit(units, chars, rawStart, rawEnd) {
+  let start = rawStart;
+  let end = rawEnd;
+  while (start < end && chars[start] === " ") start += 1;
+  while (end > start && chars[end - 1] === " ") end -= 1;
+  if (end <= start) return;
+  units.push({ text: chars.slice(start, end).join(""), start, end });
+}
+
 // 与 SQL btrim(string) 的默认行为一致：仅去首尾 ASCII 空格。
 // 刻意不裁 NBSP/全角空格/换行等，避免与 SQL 存入正文的规范化产生差异。
 export function trimAsciiSpaces(value) {
