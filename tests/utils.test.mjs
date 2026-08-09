@@ -19,6 +19,11 @@ import {
   PUBLISHABLE_CATEGORIES,
   normalizeCategory,
   isPoetryCategory,
+  splitDisplayParagraphs,
+  codepointLength,
+  codepointSlice,
+  codepointIndexFromUtf16,
+  trimAsciiSpaces,
 } from "../js/utils.mjs";
 
 test("分类拆分为新诗和旧诗且投稿不显示旧诗歌分类", () => {
@@ -206,4 +211,59 @@ test("作品按关键词、分类和热度过滤排序且不修改输入", () =>
 test("文本转换返回普通字符串而不是 HTML", () => {
   assert.equal(escapeText("<script>&"), "<script>&");
   assert.equal(escapeText(null), "");
+});
+
+test("展示串分段：空行分隔、逐段去首尾空白、去空段（含单空格与全角缩进段）", () => {
+  const content = " 第一段。 \n \n第二段。\n\n　第三段（全角缩进）\n\n\n 第四段。 ";
+  assert.deepEqual(splitDisplayParagraphs(content), [
+    "第一段。",
+    "第二段。",
+    "第三段（全角缩进）",
+    "第四段。",
+  ]);
+});
+
+test("展示串分段保留段首 NBSP（与 SQL btrim 字符集一致，不裁 U+00A0）", () => {
+  const content = "\u00A0第一段。\n\n第二段。";
+  assert.deepEqual(splitDisplayParagraphs(content), [
+    "\u00A0第一段。",
+    "第二段。",
+  ]);
+  assert.equal(
+    splitDisplayParagraphs(content).join("\n"),
+    "\u00A0第一段。\n第二段。",
+  );
+});
+
+test("展示串分段：仅含全角空格的空行同样被分段", () => {
+  const content = "第一段。\n　\n第二段。";
+  assert.deepEqual(splitDisplayParagraphs(content), ["第一段。", "第二段。"]);
+});
+
+test("码点辅助：emoji 按单个码点计数与切片", () => {
+  const text = "第一😀段";
+  assert.equal(codepointLength(text), 4);
+  assert.equal(codepointSlice(text, 0, 3), "第一😀");
+  assert.equal(codepointSlice(text, 2, 3), "😀");
+  assert.equal(codepointLength("第二段。"), 4);
+  assert.equal(codepointSlice("第一段。\n第二段。", 5, 9), "第二段。");
+});
+
+test("ASCII 空格去首尾与 SQL btrim 默认一致（不裁 NBSP/全角空格/换行）", () => {
+  assert.equal(trimAsciiSpaces("  标题  "), "标题");
+  assert.equal(trimAsciiSpaces("　全角缩进"), "　全角缩进");
+  assert.equal(trimAsciiSpaces(" NBSP 开头"), " NBSP 开头");
+  assert.equal(trimAsciiSpaces("\n换行\n"), "\n换行\n");
+  assert.equal(trimAsciiSpaces(null), "");
+  assert.equal(trimAsciiSpaces("   "), "");
+});
+
+test("码点辅助：UTF-16 偏移换算为码点索引", () => {
+  const text = "第一😀段";
+  assert.equal(codepointIndexFromUtf16(text, 0), 0);
+  assert.equal(codepointIndexFromUtf16(text, 1), 1);
+  assert.equal(codepointIndexFromUtf16(text, 2), 2);
+  assert.equal(codepointIndexFromUtf16(text, 3), 2);
+  assert.equal(codepointIndexFromUtf16(text, 4), 3);
+  assert.equal(codepointIndexFromUtf16(text, 5), 4);
 });

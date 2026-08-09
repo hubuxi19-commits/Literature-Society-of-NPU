@@ -1,11 +1,15 @@
 import { demoSeed } from "./demo-data.mjs";
 import {
+  codepointLength,
+  codepointSlice,
   createExcerpt,
   getPenNameChangeAvailability,
   maskEmail,
   PUBLISHABLE_CATEGORIES,
   searchWorks,
+  splitDisplayParagraphs,
   studentNumberToAuthEmail,
+  trimAsciiSpaces,
   validatePassword,
   validateStudentNumber,
 } from "./utils.mjs";
@@ -29,7 +33,7 @@ function makeId(prefix) {
 }
 
 function requireText(value, label, maximum) {
-  const text = String(value ?? "").trim();
+  const text = trimAsciiSpaces(value);
   if (!text) throw new Error(`${label}不能为空`);
   if (Array.from(text).length > maximum) {
     throw new Error(`${label}不能超过 ${maximum} 字`);
@@ -256,14 +260,10 @@ function createDemoService(config = {}) {
       0,
     ) + 1;
 
-  // 批注展示串：content 按 /\n\s*\n/ 分段、逐段 trim、去空段、以 \n 连接，
+  // 批注展示串：content 按空行分段、逐段去首尾空白（与 SQL btrim 同字符集）、去空段、以 \n 连接，
   // 与前端 renderParagraphs 及 SQL create_quoted_comment 的展示串一致。
   const displayStringDemo = (content) =>
-    String(content)
-      .split(/\n\s*\n/)
-      .map((paragraph) => paragraph.trim())
-      .filter(Boolean)
-      .join("\n");
+    splitDisplayParagraphs(content).join("\n");
 
   // 构造期回填：为种子作品预先生成第 1 版快照并回填 current_version_id，
   // 与 SQL 迁移中的幂等回填一致，避免 listWorks/getWork 暴露 null 指针。
@@ -381,7 +381,7 @@ function createDemoService(config = {}) {
         author_id: current.profile.id,
         title: requireText(input.title, "标题", 80),
         excerpt:
-          String(input.excerpt ?? "").trim() || createExcerpt(content, 96),
+          trimAsciiSpaces(input.excerpt) || createExcerpt(content, 96),
         content,
         category: requirePublishableCategory(input.category),
         status: "published",
@@ -517,7 +517,7 @@ function createDemoService(config = {}) {
         version_number: nextVersionNumber(work.id),
         title: requireText(input.title, "标题", 80),
         excerpt:
-          String(input.excerpt ?? "").trim() || createExcerpt(content, 96),
+          trimAsciiSpaces(input.excerpt) || createExcerpt(content, 96),
         content,
         category: requirePublishableCategory(input.category),
         change_summary: changeSummary,
@@ -620,19 +620,21 @@ function createDemoService(config = {}) {
         (item) => item.id === input.workVersionId,
       );
       if (!version) throw new Error("批注对应的作品版本不存在");
-      const quoteText = String(input.quoteText ?? "").trim();
+      // 偏移按码点校验（与 SQL char_length/substr 一致，emoji 占 1 码点）。
+      // 引用原文仅去首尾 ASCII 空格，与 SQL btrim(quote_text) 的默认行为一致（不裁 NBSP）。
+      const quoteText = String(input.quoteText ?? "").replace(/^ +| +$/g, "");
       const display = displayStringDemo(version.content);
       const start = Number(input.startOffset);
       const end = Number(input.endOffset);
       if (
-        quoteText.length < 1 ||
-        quoteText.length > 500 ||
+        codepointLength(quoteText) < 1 ||
+        codepointLength(quoteText) > 500 ||
         !Number.isInteger(start) ||
         !Number.isInteger(end) ||
         start < 0 ||
-        end > display.length ||
+        end > codepointLength(display) ||
         end <= start ||
-        display.slice(start, end) !== quoteText
+        codepointSlice(display, start, end) !== quoteText
       ) {
         throw new Error("引用原文与所选位置不符，请重新选择");
       }
@@ -1116,7 +1118,7 @@ function createSupabaseService(config) {
         p_expected_version_number: null,
         p_title: requireText(input.title, "标题", 80),
         p_excerpt:
-          String(input.excerpt ?? "").trim() || createExcerpt(content, 96),
+          trimAsciiSpaces(input.excerpt) || createExcerpt(content, 96),
         p_category: requirePublishableCategory(input.category),
         p_content: content,
         p_change_summary: "",

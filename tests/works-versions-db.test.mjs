@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { pg_trgm } from "@electric-sql/pglite/contrib/pg_trgm";
+import { splitDisplayParagraphs } from "../js/utils.mjs";
 
 const schemaUrl = new URL("../supabase/schema.sql", import.meta.url);
 const accountMigrationUrl = new URL(
@@ -126,11 +127,7 @@ async function expectError(promise) {
 }
 
 function displayString(content) {
-  return String(content)
-    .split(/\n\s*\n/)
-    .map((paragraph) => paragraph.trim())
-    .filter(Boolean)
-    .join("\n");
+  return splitDisplayParagraphs(content).join("\n");
 }
 
 test("回填：每篇作品恰好一个第 1 版，快照与作者一致", async () => {
@@ -427,6 +424,87 @@ test("批注展示串与前端 renderParagraphs 一致（单空格分隔与全�
       select public.list_work_quotes('${payload.work_id}') as payload
     `);
     assert.equal(quoteList[0].payload[0].quote_text, middlePara);
+  } finally {
+    await db.close();
+  }
+});
+
+test("批注 emoji 正文按码点偏移对齐（char_length/substr 语义，emoji 占 1 码点）", async () => {
+  const db = await createDatabase();
+  try {
+    await seed(db);
+    await applyVersionsMigration(db);
+    const content = "第一段😀。\n\n第二段。";
+    const { rows } = await asRole(db, "authenticated", USER_A, `
+      select public.create_work_version(null, null, 'emoji 正文', '', '散文', '${content}', '') as payload
+    `);
+    const payload = rows[0].payload;
+    const { rows: verRows } = await db.query(
+      "select id from public.work_versions where work_id = $1 and version_number = 1",
+      [payload.work_id],
+    );
+    const v1 = verRows[0].id;
+    // 展示串 = "第一段😀。\n第二段。"；码点偏移 [6,10) 是"第二段。"
+    const quoted = await asRole(db, "authenticated", USER_B, `
+      select public.create_quoted_comment('${payload.work_id}', '${v1}', '第二段。', 6, 10, 'emoji 前批注') as payload
+    `);
+    assert.equal(quoted.rows[0].payload.quote.quote_text, "第二段。");
+    const { rows: quoteRows } = await db.query(
+      "select start_offset, end_offset from public.comment_quotes where comment_id = $1",
+      [quoted.rows[0].payload.comment.id],
+    );
+    assert.equal(quoteRows[0].start_offset, 6);
+    assert.equal(quoteRows[0].end_offset, 10);
+  } finally {
+    await db.close();
+  }
+});
+
+test("批注段首 NBSP 不被 trim（展示串与 SQL btrim 字符集一致）", async () => {
+  const db = await createDatabase();
+  try {
+    await seed(db);
+    await applyVersionsMigration(db);
+    const content = " 第一段。\n\n第二段。";
+    const { rows } = await asRole(db, "authenticated", USER_A, `
+      select public.create_work_version(null, null, 'NBSP 正文', '', '散文', '${content}', '') as payload
+    `);
+    const payload = rows[0].payload;
+    const { rows: verRows } = await db.query(
+      "select id from public.work_versions where work_id = $1 and version_number = 1",
+      [payload.work_id],
+    );
+    const v1 = verRows[0].id;
+    // 展示串 = " 第一段。\n第二段。"；码点偏移 [6,10) 是"第二段。"
+    const quoted = await asRole(db, "authenticated", USER_B, `
+      select public.create_quoted_comment('${payload.work_id}', '${v1}', '第二段。', 6, 10, 'NBSP 前批注') as payload
+    `);
+    assert.equal(quoted.rows[0].payload.quote.quote_text, "第二段。");
+  } finally {
+    await db.close();
+  }
+});
+
+test("仅含全角空格的空行在展示串中同样被分段", async () => {
+  const db = await createDatabase();
+  try {
+    await seed(db);
+    await applyVersionsMigration(db);
+    const content = "第一段。\n　\n第二段。";
+    const { rows } = await asRole(db, "authenticated", USER_A, `
+      select public.create_work_version(null, null, '全角空格空行', '', '散文', '${content}', '') as payload
+    `);
+    const payload = rows[0].payload;
+    const { rows: verRows } = await db.query(
+      "select id from public.work_versions where work_id = $1 and version_number = 1",
+      [payload.work_id],
+    );
+    const v1 = verRows[0].id;
+    // 展示串 = "第一段。\n第二段。"；码点偏移 [5,9) 是"第二段。"
+    const quoted = await asRole(db, "authenticated", USER_B, `
+      select public.create_quoted_comment('${payload.work_id}', '${v1}', '第二段。', 5, 9, '全角空格空行批注') as payload
+    `);
+    assert.equal(quoted.rows[0].payload.quote.quote_text, "第二段。");
   } finally {
     await db.close();
   }

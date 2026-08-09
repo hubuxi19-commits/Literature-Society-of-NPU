@@ -13,6 +13,9 @@ import {
 import {
   buildCommentTree,
   CATEGORIES,
+  codepointIndexFromUtf16,
+  codepointLength,
+  codepointSlice,
   countChineseText,
   createExcerpt,
   filterAndSortWorks,
@@ -23,6 +26,7 @@ import {
   normalizeCategory,
   parseRoute,
   PUBLISHABLE_CATEGORIES,
+  splitDisplayParagraphs,
   validatePassword,
   validateStudentNumber,
 } from "./utils.mjs";
@@ -1320,13 +1324,9 @@ function renderParagraphs(content, category) {
       isPoetry ? "reading-body--poetry" : "reading-body--prose"
     }`,
   });
-  String(content ?? "")
-    .split(/\n\s*\n/)
-    .map((paragraph) => paragraph.trim())
-    .filter(Boolean)
-    .forEach((paragraph) => {
-      body.append(element("p", { text: paragraph }));
-    });
+  splitDisplayParagraphs(content).forEach((paragraph) => {
+    body.append(element("p", { text: paragraph }));
+  });
   return body;
 }
 
@@ -1466,18 +1466,21 @@ function computeQuoteSelection(versionId) {
   const paraIndex = paragraphs.indexOf(anchorPara);
   if (paraIndex < 0) return null;
   // 展示串是各段落 textContent 去首尾空白后用单个 "\n" 拼接，
-  // 因此每个前置 <p> 累积 textContent.length + 1 的偏移；
-  // 该约定必须与服务器端 create_quoted_comment SQL / displayStringDemo 保持一致。
+  // 因此每个前置 <p> 累积 codepointLength + 1 的偏移；
+  // 偏移按码点计算（与 SQL char_length/substr 一致），emoji 占 1 个码点。
   let displayOffset = 0;
   for (let i = 0; i < paraIndex; i += 1) {
-    displayOffset += paragraphs[i].textContent.length + 1;
+    displayOffset += codepointLength(paragraphs[i].textContent) + 1;
   }
   const text = anchorPara.textContent;
-  const start = Math.min(selection.anchorOffset, selection.focusOffset);
-  const end = Math.max(selection.anchorOffset, selection.focusOffset);
-  if (end <= start) return null;
+  // selection.anchorOffset/focusOffset 是 UTF-16 偏移，需换算为码点偏移。
+  const startUtf16 = Math.min(selection.anchorOffset, selection.focusOffset);
+  const endUtf16 = Math.max(selection.anchorOffset, selection.focusOffset);
+  if (endUtf16 <= startUtf16) return null;
+  const start = codepointIndexFromUtf16(text, startUtf16);
+  const end = codepointIndexFromUtf16(text, endUtf16);
   return {
-    quoteText: text.slice(start, end),
+    quoteText: codepointSlice(text, start, end),
     startOffset: displayOffset + start,
     endOffset: displayOffset + end,
     versionId,

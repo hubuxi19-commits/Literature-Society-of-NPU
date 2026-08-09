@@ -984,6 +984,55 @@ test("演示服务批注：保存正确版本原文位置，位置不符被拒",
   );
 });
 
+test("演示服务批注：emoji 正文按码点偏移对齐（与 SQL char_length/substr 一致）", async () => {
+  const service = createDataService({ mode: "demo" });
+  await service.signIn({ studentNumber: "2023123456", password: "wenyuan88" });
+  const created = await service.createWork({
+    title: "emoji 批注测试",
+    excerpt: "",
+    category: "散文",
+    content: "第一段😀。\n\n第二段。",
+  });
+  const versions = await service.listWorkVersions(created.id);
+  const v1 = versions[0];
+  // 展示串 = "第一段😀。\n第二段。"，"第二段。"位于码点 [6,10)
+  const result = await service.createQuotedComment({
+    workId: created.id,
+    workVersionId: v1.id,
+    quoteText: "第二段。",
+    startOffset: 6,
+    endOffset: 10,
+    content: "emoji 之前没问题。",
+  });
+  assert.equal(result.quote.quote_text, "第二段。");
+  const quotes = await service.listWorkQuotes(created.id);
+  assert.equal(quotes[0].start_offset, 6);
+  assert.equal(quotes[0].end_offset, 10);
+});
+
+test("演示服务批注：段首 NBSP 不被 trim（展示串与 SQL btrim 一致）", async () => {
+  const service = createDataService({ mode: "demo" });
+  await service.signIn({ studentNumber: "2023123456", password: "wenyuan88" });
+  const created = await service.createWork({
+    title: "NBSP 批注测试",
+    excerpt: "",
+    category: "散文",
+    content: " 第一段。\n\n第二段。",
+  });
+  const versions = await service.listWorkVersions(created.id);
+  const v1 = versions[0];
+  // 展示串 = " 第一段。\n第二段。"，"第二段。"位于码点 [6,10)
+  const result = await service.createQuotedComment({
+    workId: created.id,
+    workVersionId: v1.id,
+    quoteText: "第二段。",
+    startOffset: 6,
+    endOffset: 10,
+    content: "段首 NBSP 不影响后续批注。",
+  });
+  assert.equal(result.quote.quote_text, "第二段。");
+});
+
 test("Supabase 服务通过 RPC 创建版本、恢复版本并返回版本/批注", async () => {
   const invoked = [];
   // 模拟服务端作品行随 RPC 写入推进的当前版本号（create→2、restore→3）

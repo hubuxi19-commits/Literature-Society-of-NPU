@@ -425,7 +425,7 @@ begin
     raise exception '引用位置无效';
   end if;
 
-  for v_seg in select regexp_split_to_table(v_version.content, E'\n[[:space:]]*\n') loop
+  for v_seg in select regexp_split_to_table(v_version.content, E'\n[ \t\r\n\v\f　]*\n') loop
     v_seg := btrim(v_seg, E' \t\r\n\v\f　');
     if v_seg <> '' then
       if v_display <> '' then

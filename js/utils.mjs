@@ -239,3 +239,49 @@ export function searchWorks(works = [], filters = {}) {
 export function escapeText(value) {
   return value == null ? "" : String(value);
 }
+
+// 展示串契约字符集：与 SQL create_quoted_comment 的 btrim 字符集 E' \t\r\n\v\f　' 完全一致。
+// 刻意不含 NBSP（U+00A0）：JS 的 trim()/\s 会裁掉 NBSP，而 SQL btrim 不会，导致两端展示串偏移错位。
+const DISPLAY_WHITESPACE = " \t\r\n\v\f　";
+const DISPLAY_BLANK_LINE_RE = new RegExp(`\\n[${DISPLAY_WHITESPACE}]*\\n`, "g");
+const DISPLAY_EDGE_TRIM_RE = new RegExp(
+  `^[${DISPLAY_WHITESPACE}]+|[${DISPLAY_WHITESPACE}]+$`,
+  "g",
+);
+
+// 作品正文 → 展示串段落：按空行分段、逐段去首尾空白、去空段。
+// 与 SQL create_quoted_comment、前端 renderParagraphs 的展示串约定一致。
+export function splitDisplayParagraphs(content) {
+  return String(content ?? "")
+    .split(DISPLAY_BLANK_LINE_RE)
+    .map((paragraph) => paragraph.replace(DISPLAY_EDGE_TRIM_RE, ""))
+    .filter(Boolean);
+}
+
+// 与 SQL btrim(string) 的默认行为一致：仅去首尾 ASCII 空格。
+// 刻意不裁 NBSP/全角空格/换行等，避免与 SQL 存入正文的规范化产生差异。
+export function trimAsciiSpaces(value) {
+  return String(value ?? "").replace(/^ +| +$/g, "");
+}
+
+export function codepointLength(text) {
+  return Array.from(String(text)).length;
+}
+
+export function codepointSlice(text, start, end) {
+  return Array.from(String(text)).slice(start, end).join("");
+}
+
+// 浏览器 selection 偏移是 UTF-16 的；SQL 偏移按码点（char_length/substr）计算。
+// 返回严格位于该 UTF-16 边界之前的码点数量（边界落在代理对中间时按前半处理）。
+export function codepointIndexFromUtf16(text, utf16Offset) {
+  const value = String(text);
+  let codepoints = 0;
+  let units = 0;
+  for (const ch of value) {
+    if (units + ch.length > utf16Offset) break;
+    units += ch.length;
+    codepoints += 1;
+  }
+  return codepoints;
+}
