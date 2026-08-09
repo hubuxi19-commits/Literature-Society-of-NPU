@@ -973,6 +973,53 @@ async function mobileFlow(browser, browserMessages) {
   );
   await expectVisible(page.locator(".reading-body--poetry"), "移动端诗歌正文");
   await expectNoHorizontalOverflow(page, "移动阅读页");
+
+  // 移动端批注：阅读页「查看历史版本」旁的「添加批注」按钮进入选择模式，
+  // 选中句子后松手直接弹批注输入，提交后批注计数 +1。
+  // 移动端 #accountButton 在 390px 隐藏，登录走底部导航「我的」入口。
+  await page
+    .getByRole("navigation", { name: "移动端主要导航" })
+    .getByRole("link", { name: "我的", exact: true })
+    .click();
+  await expectVisible(page.locator("#authDialog"), "移动端登录窗口");
+  await page.locator('#loginForm [name="studentNumber"]').fill("2023123456");
+  await page.locator('#loginForm [name="password"]').fill("wenyuan88");
+  await page.getByRole("button", { name: "登录并继续" }).click();
+  await page.locator("#authDialog").waitFor({ state: "hidden" });
+  await goToHash(page, "#/works/work-night-bus", "末班车经过友谊校区");
+  const mobileVersionsLink = page.getByRole("link", { name: "查看历史版本" });
+  await expectVisible(mobileVersionsLink, "移动端历史版本入口");
+  const annotateEntry = page.getByRole("button", { name: "添加批注", exact: true });
+  await expectVisible(annotateEntry, "移动端批注入口");
+  await annotateEntry.click();
+  page.once("dialog", (dialog) => dialog.accept("移动端自动化批注"));
+  await page.evaluate(() => {
+    const body = document.querySelector("[data-annotatable]");
+    if (!body) throw new Error("阅读页缺少可批注正文");
+    const firstPara = body.querySelector("p");
+    const textNode = firstPara?.firstChild;
+    if (!firstPara || !textNode) throw new Error("阅读页正文缺少段落文本节点");
+    const range = document.createRange();
+    range.setStart(textNode, 0);
+    range.setEnd(textNode, 11);
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    document.body.dispatchEvent(new Event("touchend", { bubbles: true }));
+  });
+  await page
+    .getByRole("heading", { name: "批注 · 1", exact: true })
+    .waitFor();
+  await expectVisible(
+    page.getByText(`“车窗把夜色裁成一格一格”`, { exact: true }),
+    "移动端批注引用展示",
+  );
+  const mobileQuoteItemText =
+    (await page.locator(".quote-item").first().textContent()) ?? "";
+  if (!mobileQuoteItemText.includes("移动端自动化批注")) {
+    throw new Error(`移动端批注正文没有显示：${mobileQuoteItemText}`);
+  }
+
   const readingScreenshot = await page.screenshot({ fullPage: true });
   await context.close();
   return { homeScreenshot, readingScreenshot };

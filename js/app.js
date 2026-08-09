@@ -1450,6 +1450,7 @@ function createCommentItem(comment, workId, depth = 0) {
 }
 
 let annotateButton = null;
+let annotateMode = false;
 
 function computeQuoteSelection(versionId) {
   const selection = window.getSelection();
@@ -1517,6 +1518,54 @@ function hideAnnotateButton() {
   if (annotateButton) annotateButton.hidden = true;
 }
 
+async function openAnnotation(selection, body) {
+  const content = window.prompt("写下这条批注（1–2000 字）：");
+  if (content === null) return;
+  const text = String(content).trim();
+  if (!text) return;
+  try {
+    await service.createQuotedComment({
+      workId: body.dataset.workId,
+      workVersionId: selection.versionId || body.dataset.versionId,
+      quoteText: selection.quoteText,
+      startOffset: selection.startOffset,
+      endOffset: selection.endOffset,
+      content: text,
+    });
+    showToast("批注已发表。", "success");
+    hideAnnotateButton();
+    await renderWork(body.dataset.workId);
+  } catch (error) {
+    if (routeToAccountSecurityIfUnverified(error)) return;
+    showToast(error.message);
+  }
+}
+
+// 选择模式：移动端点「添加批注」后，选中句子松手即直接进入批注输入，
+// 不再依赖桌面端 mouseup 唤出浮动按钮。
+function commitAnnotationFromSelection() {
+  const body = document.querySelector("[data-annotatable]");
+  if (!body) return;
+  const selection = computeQuoteSelection(body.dataset.versionId);
+  if (!selection) return;
+  if (selection.error) {
+    showToast(selection.error);
+    return;
+  }
+  annotateMode = false;
+  const entry = document.querySelector("[data-action='annotate-mode']");
+  if (entry) entry.textContent = "添加批注";
+  openAnnotation(selection, body);
+}
+
+function handleSelection(event) {
+  if (annotateMode) {
+    commitAnnotationFromSelection();
+    return;
+  }
+  showAnnotateButton(event);
+}
+
 async function renderWork(workId) {
   showLoading("正在展开作品");
   cleanupPreparedExport();
@@ -1582,6 +1631,17 @@ async function renderWork(workId) {
         text: "查看历史版本",
       }),
     );
+    // 移动端长按选区无法可靠唤出浮动批注按钮，提供显式「添加批注」入口进入选择模式。
+    if (mobileHomeMedia.matches) {
+      actionBar.append(
+        element("button", {
+          className: "secondary-button annotate-entry",
+          type: "button",
+          text: "添加批注",
+          dataset: { action: "annotate-mode" },
+        }),
+      );
+    }
     actionBar.append(
       element("button", {
         className: "secondary-button export-work-button",
@@ -2645,6 +2705,7 @@ async function renderCurrentRoute() {
   // 选区批注浮动按钮挂在 document.body 下，路由重绘不会移除它；
   // 选中内容随正文被替换而坍缩时 Chrome 并不触发 selectionchange，必须在这里显式隐藏。
   hideAnnotateButton();
+  annotateMode = false;
   accountMenu.hidden = true;
   closeProfileEditor();
   siteHeader.dataset.menuOpen = "false";
@@ -2763,7 +2824,8 @@ async function refreshWorks() {
 
 async function initialize() {
   showLoading();
-  document.addEventListener("mouseup", showAnnotateButton);
+  document.addEventListener("mouseup", handleSelection);
+  document.addEventListener("touchend", handleSelection);
   document.addEventListener("selectionchange", () => {
     if (!window.getSelection()?.isCollapsed) return;
     hideAnnotateButton();
@@ -3128,32 +3190,21 @@ document.addEventListener("click", async (event) => {
     } finally {
       if (trigger.isConnected) trigger.disabled = false;
     }
+  } else if (action === "annotate-mode") {
+    annotateMode = !annotateMode;
+    trigger.textContent = annotateMode ? "取消批注" : "添加批注";
+    if (annotateMode) {
+      showToast("请在正文中选中要批注的句子");
+    } else {
+      hideAnnotateButton();
+    }
   } else if (action === "open-annotation") {
     const raw = trigger.dataset.selection;
     if (!raw) return;
     const selection = JSON.parse(raw);
     const body = document.querySelector("[data-annotatable]");
     if (!body) return;
-    const content = window.prompt("写下这条批注（1–2000 字）：");
-    if (content === null) return;
-    const text = String(content).trim();
-    if (!text) return;
-    try {
-      const result = await service.createQuotedComment({
-        workId: body.dataset.workId,
-        workVersionId: selection.versionId || body.dataset.versionId,
-        quoteText: selection.quoteText,
-        startOffset: selection.startOffset,
-        endOffset: selection.endOffset,
-        content: text,
-      });
-      showToast("批注已发表。", "success");
-      hideAnnotateButton();
-      await renderWork(body.dataset.workId);
-    } catch (error) {
-      if (routeToAccountSecurityIfUnverified(error)) return;
-      showToast(error.message);
-    }
+    await openAnnotation(selection, body);
   } else if (action === "toggle-featured") {
     if (!requireVerifiedWrite(window.location.hash)) return;
     const workId = trigger.dataset.workId;
