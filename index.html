@@ -346,6 +346,49 @@
       <div id="profileDialogContent"></div>
     </dialog>
 
+    <dialog
+      class="modal annotate-dialog"
+      id="annotateDialog"
+      aria-labelledby="annotateTitle"
+    >
+      <div class="modal-head">
+        <div>
+          <p class="eyebrow">ANNOTATION</p>
+          <h2 id="annotateTitle">写下批注</h2>
+        </div>
+        <button
+          class="close-button"
+          type="button"
+          data-action="close-annotate"
+          aria-label="关闭批注窗口"
+        >
+          关闭
+        </button>
+      </div>
+
+      <form id="annotateForm" class="stack-form">
+        <blockquote class="annotate-quote" id="annotateQuoteText"></blockquote>
+        <label>
+          <span>你的批注</span>
+          <textarea
+            id="annotateContent"
+            name="content"
+            placeholder="写下你的发现（1–2000 字）"
+            maxlength="2000"
+            rows="5"
+            required
+          ></textarea>
+        </label>
+        <p class="form-message" data-annotate-message role="status"></p>
+        <div class="modal-actions">
+          <button class="secondary-button" type="button" data-action="close-annotate">
+            取消
+          </button>
+          <button class="primary-button" type="submit">发表批注</button>
+        </div>
+      </form>
+    </dialog>
+
     <div class="toast-region" aria-live="polite" aria-atomic="true">
       <div class="toast" id="toast" hidden></div>
     </div>

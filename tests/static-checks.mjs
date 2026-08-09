@@ -11,6 +11,9 @@ test("HTML 使用独立样式和模块脚本并包含可访问弹窗", async () 
   assert.match(html, /<dialog[^>]+id="authDialog"/);
   assert.match(html, /<dialog[^>]+id="confirmDialog"/);
   assert.match(html, /<dialog[^>]+id="profileDialog"/);
+  assert.match(html, /<dialog[^>]+id="annotateDialog"/);
+  assert.match(html, /id="annotateForm"/);
+  assert.match(html, /id="annotateQuoteText"/);
   assert.match(html, /aria-live="polite"/);
   assert.doesNotMatch(html, /service_role/i);
   assert.doesNotMatch(html, /<style[\s>]/i);
