@@ -349,6 +349,13 @@ git push origin main
 
 以下条目记录已实际发布到生产的真实改动（区别于上面的示例步骤）。
 
+### 2026-08-09 · 发布3：版本与批注
+
+- **前端**：功能分支 `codex/wenyuan-community-upgrade` 快进合并 `main`（`e7b5fc9` → `d044f99`）并推送；GitHub Pages（source `main`）构建完成，生产站已更新。
+- **数据库**：生产 Supabase 项目（ref `odfjxtzgekhiaktzaxas`）在 SQL Editor 执行了 [`supabase/migrations/20260808_work_versions_and_quotes.sql`](./supabase/migrations/20260808_work_versions_and_quotes.sql)：新建 `work_versions`、`comment_quotes` 表、索引与 RLS，`works` 增加 `current_version_id`，回填现有作品为第 1 版，收紧 `works` 直接写权限，创建版本/恢复/删除/批注/列表受保护 RPC。
+- **发布内容**：不可变作品版本历史（每次修改生成新版本并填写修改说明）、历史版本页与恢复旧版本（恢复生成新版本、不删历史）、固定到版本的文本选区批注（批注与引用原文不随后续修改变化，并入作品讨论）。
+- **生产验证**：迁移后版本/批注 6 个 RPC 齐全、作品回填无缺；线上公开阅读页正常渲染、「查看历史版本」入口在、无 JS 错误。
+
 ### 2026-08-07 · 发布2：稳定数据读取
 
 - **前端**：功能分支 `codex/wenyuan-community-upgrade` 快进合并 `main`（`f9defe2` → `39ac2e7`）并推送；GitHub Pages（legacy，source `main`）构建完成，生产站已更新。
