@@ -349,6 +349,13 @@ git push origin main
 
 以下条目记录已实际发布到生产的真实改动（区别于上面的示例步骤）。
 
+### 2026-08-11 · 发布4：私密社交与站内通知
+
+- **前端**：功能分支 `codex/wenyuan-community-upgrade` 快进合并 `main`（`43d3d6e` → `90743df`）并推送；GitHub Pages（source `main`）构建完成，生产站已更新。
+- **数据库**：生产 Supabase 项目（ref `odfjxtzgekhiaktzaxas`）在 SQL Editor 执行了 [`supabase/migrations/20260810_social_and_notifications.sql`](./supabase/migrations/20260810_social_and_notifications.sql)：新建 `follows`、`bookmarks`、`comment_likes`、`notifications` 表、索引与 RLS 并 revoke 直接授权，创建关注/收藏/评论点赞/作品喜欢/通知读写/我的列表/社交计数等受保护 RPC，作品喜欢、评论、批注、软删等既有写路径迁移到 RPC 收口。
+- **发布内容**：关注作者与作品收藏、评论点赞与作品喜欢、聚合站内通知（评论/回复/点赞/关注/收藏的动态集中到「消息」，未读角标、点击已读、一键全部已读）、我的关注/我的收藏/关注我的人页面。
+- **生产验证**：迁移后 4 表 + 16 个关键 RPC 齐全；`on conflict ... returning` 行为在生产库验证通过；线上公开阅读页、作品页社交操作条、作者页粉丝数、通知页登录门正常，无 JS 错误。
+
 ### 2026-08-09 · 发布3：版本与批注
 
 - **前端**：功能分支 `codex/wenyuan-community-upgrade` 快进合并 `main`（`e7b5fc9` → `d044f99`）并推送；GitHub Pages（source `main`）构建完成，生产站已更新。
