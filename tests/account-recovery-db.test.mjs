@@ -13,6 +13,8 @@ const migrationUrl = new URL(
 
 const SECURITY_BLOCK_START = "-- ACCOUNT_RECOVERY_SECURITY_START";
 const SECURITY_BLOCK_END = "-- ACCOUNT_RECOVERY_SECURITY_END";
+const SOCIAL_BLOCK_START = "-- SOCIAL_NOTIFICATIONS_START";
+const SOCIAL_BLOCK_END = "-- SOCIAL_NOTIFICATIONS_END";
 
 const WRITER_ID = "20000000-0000-4000-8000-000000000001";
 const WORK_ID = "20000000-0000-4000-8000-000000000002";
@@ -60,9 +62,23 @@ function withoutAccountSecurityBlock(sql) {
   if (end === -1) {
     throw new Error("fresh schema account-security block is not closed");
   }
-  return sql.slice(0, start) + sql.slice(
+  const after = sql.slice(
     end + SECURITY_BLOCK_END.length,
   );
+  // 社交通知迁移经自身测试单独加载，增量模式跳过 SOCIAL 块以避免
+  // 其 RPC 依赖的 work_versions/comment_quotes 与 is_account_write_allowed 出现缺口。
+  const socialStart = after.indexOf(SOCIAL_BLOCK_START);
+  if (socialStart !== -1) {
+    const socialEnd = after.indexOf(SOCIAL_BLOCK_END, socialStart);
+    if (socialEnd !== -1) {
+      return (
+        sql.slice(0, start) +
+        after.slice(0, socialStart) +
+        after.slice(socialEnd + SOCIAL_BLOCK_END.length)
+      );
+    }
+  }
+  return sql.slice(0, start) + after;
 }
 
 async function createIncrementalDatabase() {

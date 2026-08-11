@@ -26,6 +26,8 @@ const VERSIONS_START = "-- VERSIONS_QUOTES_START";
 const VERSIONS_END = "-- VERSIONS_QUOTES_END";
 const ACCOUNT_START = "-- ACCOUNT_RECOVERY_SECURITY_START";
 const ACCOUNT_END = "-- ACCOUNT_RECOVERY_SECURITY_END";
+const SOCIAL_START = "-- SOCIAL_NOTIFICATIONS_START";
+const SOCIAL_END = "-- SOCIAL_NOTIFICATIONS_END";
 
 const USER_A = "10000000-0000-4000-8000-000000000001";
 const USER_B = "10000000-0000-4000-8000-000000000002";
@@ -62,9 +64,13 @@ async function createDatabase() {
     grant execute on function auth.uid() to anon, authenticated, service_role;
   `);
   const schema = stripBlock(
-    stripBlock(await readFile(schemaUrl, "utf8"), BROWSE_START, BROWSE_END),
-    VERSIONS_START,
-    VERSIONS_END,
+    stripBlock(
+      stripBlock(await readFile(schemaUrl, "utf8"), BROWSE_START, BROWSE_END),
+      VERSIONS_START,
+      VERSIONS_END,
+    ),
+    SOCIAL_START,
+    SOCIAL_END,
   );
   await db.exec(schema);
   await db.exec(await readFile(accountMigrationUrl, "utf8"));

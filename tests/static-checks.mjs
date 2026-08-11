@@ -436,6 +436,14 @@ test("schema 的版本批注块与迁移同时存在", async () => {
   assert.match(schema, /create table if not exists public\.comment_quotes/i);
 });
 
+test("schema 的社交通知块与迁移同时存在", async () => {
+  const schema = await readFile(schemaUrl, "utf8");
+  assert.match(schema, /-- SOCIAL_NOTIFICATIONS_START/);
+  assert.match(schema, /-- SOCIAL_NOTIFICATIONS_END/);
+  assert.match(schema, /create table if not exists public\.follows/i);
+  assert.match(schema, /create table if not exists public\.notifications/i);
+});
+
 test("前端实现历史版本页、恢复入口与阅读页版本入口", async () => {
   const app = await readFile(new URL("../js/app.js", import.meta.url), "utf8");
   assert.match(app, /renderWorkVersions/);
