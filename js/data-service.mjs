@@ -1717,52 +1717,23 @@ function createSupabaseService(config) {
     },
 
     async toggleLike(workId) {
-      const current = await requireRemoteSession();
+      await requireRemoteSession();
       const client = await getClient();
-      const { data: existing, error: findError } = await client
-        .from("likes")
-        .select("work_id")
-        .eq("work_id", workId)
-        .eq("user_id", current.profile.id)
-        .maybeSingle();
-      if (findError) throw new Error(findError.message);
-      let liked;
-      if (existing) {
-        const { error } = await client
-          .from("likes")
-          .delete()
-          .eq("work_id", workId)
-          .eq("user_id", current.profile.id);
-        if (error) throw new Error(error.message);
-        liked = false;
-      } else {
-        const { error } = await client
-          .from("likes")
-          .insert({ work_id: workId, user_id: current.profile.id });
-        if (error) throw new Error(error.message);
-        liked = true;
-      }
-      const { count, error: countError } = await client
-        .from("likes")
-        .select("*", { count: "exact", head: true })
-        .eq("work_id", workId);
-      if (countError) throw new Error(countError.message);
-      return { liked, likeCount: count ?? 0 };
+      const { data, error } = await client.rpc("toggle_like_work", {
+        p_work_id: workId,
+      });
+      if (error) throw new Error(error.message);
+      return { liked: Boolean(data?.liked), likeCount: data?.like_count ?? 0 };
     },
 
     async addComment(workId, content, parentId = null) {
       const current = await requireRemoteSession();
       const client = await getClient();
-      const { data, error } = await client
-        .from("comments")
-        .insert({
-          work_id: workId,
-          user_id: current.profile.id,
-          parent_id: parentId,
-          content: requireText(content, "评论", 2000),
-        })
-        .select("*")
-        .single();
+      const { data, error } = await client.rpc("create_comment", {
+        p_work_id: workId,
+        p_content: requireText(content, "评论", 2000),
+        p_parent_id: parentId ?? null,
+      });
       if (error) throw new Error(error.message);
       return {
         ...data,
@@ -1852,6 +1823,180 @@ function createSupabaseService(config) {
         id: data?.id ?? workId,
         is_featured: data?.is_featured ?? Boolean(featured),
       };
+    },
+
+    // ---- 私密社交（发布四）----
+
+    async followUser(targetUserId) {
+      await requireRemoteSession();
+      const client = await getClient();
+      const { data, error } = await client.rpc("follow_user", {
+        p_target_user_id: targetUserId,
+      });
+      if (error) throw new Error(error.message);
+      return data;
+    },
+
+    async unfollowUser(targetUserId) {
+      await requireRemoteSession();
+      const client = await getClient();
+      const { error } = await client.rpc("unfollow_user", {
+        p_target_user_id: targetUserId,
+      });
+      if (error) throw new Error(error.message);
+    },
+
+    async bookmarkWork(workId) {
+      await requireRemoteSession();
+      const client = await getClient();
+      const { data, error } = await client.rpc("bookmark_work", {
+        p_work_id: workId,
+      });
+      if (error) throw new Error(error.message);
+      return data;
+    },
+
+    async unbookmarkWork(workId) {
+      await requireRemoteSession();
+      const client = await getClient();
+      const { error } = await client.rpc("unbookmark_work", {
+        p_work_id: workId,
+      });
+      if (error) throw new Error(error.message);
+    },
+
+    async likeComment(commentId) {
+      await requireRemoteSession();
+      const client = await getClient();
+      const { data, error } = await client.rpc("like_comment", {
+        p_comment_id: commentId,
+      });
+      if (error) throw new Error(error.message);
+      return data;
+    },
+
+    async unlikeComment(commentId) {
+      await requireRemoteSession();
+      const client = await getClient();
+      const { error } = await client.rpc("unlike_comment", {
+        p_comment_id: commentId,
+      });
+      if (error) throw new Error(error.message);
+    },
+
+    async listNotifications(cursor, pageSize = 20) {
+      await requireRemoteSession();
+      const client = await getClient();
+      const { data, error } = await client.rpc("list_notifications", {
+        p_cursor: cursor ?? null,
+        p_page_size: pageSize,
+      });
+      if (error) throw new Error(error.message);
+      return {
+        notifications: data?.notifications ?? [],
+        nextCursor: data?.next_cursor ?? null,
+      };
+    },
+
+    async getNotificationUnreadCount() {
+      await requireRemoteSession();
+      const client = await getClient();
+      const { data, error } = await client.rpc("get_notification_unread_count", {});
+      if (error) throw new Error(error.message);
+      return { unread_count: data?.unread_count ?? 0 };
+    },
+
+    async markNotificationRead(notificationId) {
+      await requireRemoteSession();
+      const client = await getClient();
+      const { error } = await client.rpc("mark_notification_read", {
+        p_notification_id: notificationId,
+      });
+      if (error) throw new Error(error.message);
+    },
+
+    async markAllNotificationsRead() {
+      await requireRemoteSession();
+      const client = await getClient();
+      const { error } = await client.rpc("mark_all_notifications_read", {});
+      if (error) throw new Error(error.message);
+    },
+
+    async listMyFollowing(cursor, pageSize = 20) {
+      await requireRemoteSession();
+      const client = await getClient();
+      const { data, error } = await client.rpc("list_my_following", {
+        p_cursor: cursor ?? null,
+        p_page_size: pageSize,
+      });
+      if (error) throw new Error(error.message);
+      return {
+        following: data?.following ?? [],
+        nextCursor: data?.next_cursor ?? null,
+      };
+    },
+
+    async listMyFollowers(cursor, pageSize = 20) {
+      await requireRemoteSession();
+      const client = await getClient();
+      const { data, error } = await client.rpc("list_my_followers", {
+        p_cursor: cursor ?? null,
+        p_page_size: pageSize,
+      });
+      if (error) throw new Error(error.message);
+      return {
+        followers: data?.followers ?? [],
+        nextCursor: data?.next_cursor ?? null,
+      };
+    },
+
+    async listMyBookmarks(cursor, pageSize = 20) {
+      await requireRemoteSession();
+      const client = await getClient();
+      const { data, error } = await client.rpc("list_my_bookmarks", {
+        p_cursor: cursor ?? null,
+        p_page_size: pageSize,
+      });
+      if (error) throw new Error(error.message);
+      return {
+        bookmarks: data?.bookmarks ?? [],
+        nextCursor: data?.next_cursor ?? null,
+      };
+    },
+
+    async getWorkSocialCounts(workId) {
+      const client = await getClient();
+      const { data, error } = await client.rpc("get_work_social_counts", {
+        p_work_id: workId,
+      });
+      if (error) throw new Error(error.message);
+      return {
+        bookmark_count: data?.bookmark_count ?? 0,
+        bookmarked_by_current_user: Boolean(data?.bookmarked_by_current_user),
+      };
+    },
+
+    async getProfileSocialCounts(profileId) {
+      const client = await getClient();
+      const { data, error } = await client.rpc("get_profile_social_counts", {
+        p_profile_id: profileId,
+      });
+      if (error) throw new Error(error.message);
+      return {
+        following_count: data?.following_count ?? 0,
+        followers_count: data?.followers_count ?? 0,
+        followed_by_current_user: Boolean(data?.followed_by_current_user),
+      };
+    },
+
+    async getCommentLikeState(commentIds) {
+      const client = await getClient();
+      const ids = Array.isArray(commentIds) ? commentIds : [];
+      const { data, error } = await client.rpc("get_comment_like_state", {
+        p_comment_ids: ids,
+      });
+      if (error) throw new Error(error.message);
+      return { comments: data?.comments ?? [] };
     },
 
     async getAccountSecurityStatus() {
