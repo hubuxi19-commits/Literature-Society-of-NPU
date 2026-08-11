@@ -8,7 +8,7 @@ import { createDataService } from "../js/data-service.mjs";
 // （next_cursor→nextCursor、like_count→likeCount、user_pen_name/user_role 补全）。
 // 改造前 toggleLike/addComment 直连 likes/comments 表，fake 对非 profiles 表一律
 // 返回「直接表访问已撤销」，因此改造前这些用例会失败。
-function makeFakeClient() {
+function makeFakeClient({ failSession = false } = {}) {
   const invoked = [];
   const errorResult = {
     data: null,
@@ -89,17 +89,22 @@ function makeFakeClient() {
   };
   const fakeClient = {
     auth: {
-      getSession: async () => ({
-        data: {
-          session: {
-            user: {
-              id: "u-1",
-              email: "2023123456@accounts.wenyuan.invalid",
+      getSession: async () => {
+        if (failSession) {
+          return { data: null, error: { message: "session required" } };
+        }
+        return {
+          data: {
+            session: {
+              user: {
+                id: "u-1",
+                email: "2023123456@accounts.wenyuan.invalid",
+              },
             },
           },
-        },
-        error: null,
-      }),
+          error: null,
+        };
+      },
     },
     from: (table) => {
       if (table === "profiles") {
@@ -150,8 +155,8 @@ function makeFakeClient() {
   return { fakeClient, invoked };
 }
 
-function supabaseService() {
-  const { fakeClient, invoked } = makeFakeClient();
+function supabaseService(failSession = false) {
+  const { fakeClient, invoked } = makeFakeClient({ failSession });
   const service = createDataService({
     mode: "supabase",
     supabaseUrl: "https://project.supabase.co",
@@ -346,8 +351,8 @@ test("Supabase 服务：公开聚合计数与我的状态", async () => {
 });
 
 test("Supabase 服务：公开计数读取无需登录", async () => {
-  const { service, invoked } = supabaseService();
-  // 不调用 getSession()：getWorkSocialCounts/getProfileSocialCounts/getCommentLikeState 是公开读接口
+  const { service, invoked } = supabaseService(true);
+  // failSession 让 auth.getSession 抛错：若未来给这三个公开读方法误加 requireRemoteSession，本测试即失败
   assert.deepEqual(await service.getWorkSocialCounts("work-1"), {
     bookmark_count: 5,
     bookmarked_by_current_user: true,
