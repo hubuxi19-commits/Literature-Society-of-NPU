@@ -58,6 +58,13 @@
           </button>
           <div class="account-menu" id="accountMenu" hidden>
             <a id="profileLink" href="#/">我的主页</a>
+            <a href="#/notifications">
+              通知
+              <span class="nav-badge" id="menuNotificationsBadge" hidden></span>
+            </a>
+            <a href="#/my/bookmarks">我的收藏</a>
+            <a href="#/my/following">我关注的人</a>
+            <a href="#/my/followers">关注我的人</a>
             <a href="#/account/security">账号安全</a>
             <button type="button" data-action="logout">退出登录</button>
           </div>
@@ -76,6 +83,10 @@
       <a href="#/" data-nav="home">翻阅</a>
       <a href="#/discussions" data-nav="discussions">讨论</a>
       <a href="#/write" data-nav="write">写作</a>
+      <a href="#/notifications" data-nav="notifications">
+        消息
+        <span class="nav-badge" id="notificationsNavBadge" hidden></span>
+      </a>
       <a
         id="mobileProfileLink"
         href="#/"

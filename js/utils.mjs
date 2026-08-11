@@ -79,6 +79,26 @@ export function formatDateTime(value) {
   }).format(date);
 }
 
+// 站内通知的相对时间：刚发生、N 分钟/小时/天前、昨天、N 周/月前，超过一年回退到具体日期。
+export function formatRelativeTime(value, now = Date.now()) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const current = new Date(now).getTime();
+  if (Number.isNaN(current)) return "";
+  const diff = Math.max(0, current - date.getTime());
+  const minutes = Math.floor(diff / 60000);
+  if (minutes < 1) return "刚刚";
+  if (minutes < 60) return `${minutes} 分钟前`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} 小时前`;
+  const days = Math.floor(hours / 24);
+  if (days < 2) return "昨天";
+  if (days < 7) return `${days} 天前`;
+  if (days < 30) return `${Math.floor(days / 7)} 周前`;
+  if (days < 365) return `${Math.floor(days / 30)} 个月前`;
+  return formatDate(value);
+}
+
 export function getPenNameChangeAvailability(lastChangedAt, now = Date.now()) {
   const lastChanged = new Date(lastChangedAt).getTime();
   if (!lastChangedAt || Number.isNaN(lastChanged)) {
@@ -165,7 +185,49 @@ export function parseRoute(hash = "#/") {
   if (parts.length === 3 && parts[0] === "works" && parts[2] === "edit") {
     return { name: "editWork", id: decodeURIComponent(parts[1]) };
   }
+  if (parts.length === 1 && parts[0] === "notifications") {
+    return { name: "notifications" };
+  }
+  if (parts.length === 2 && parts[0] === "my") {
+    if (parts[1] === "following") return { name: "my-following" };
+    if (parts[1] === "followers") return { name: "my-followers" };
+    if (parts[1] === "bookmarks") return { name: "my-bookmarks" };
+  }
   return { name: "not-found" };
+}
+
+// 通知条目的 actor 文案：单人为笔名；多人取最近预览（cap 3）顿号连接，
+// 计数超过预览长度时追加「等 N 人」。与 RPC actor_pen_names + actor_count 契约对应。
+export function formatActors(notification) {
+  const names = Array.isArray(notification?.actor_pen_names)
+    ? notification.actor_pen_names
+    : [];
+  const count = Number(notification?.actor_count) || names.length || 0;
+  if (count <= 1) return names[0] ?? "有人";
+  const preview = names.slice(0, 3).join("、");
+  return count > names.length ? `${preview} 等 ${count} 人` : preview;
+}
+
+// 通知条目的展示文案（+N 折叠后的完整句子）。
+export function buildNotificationText(notification) {
+  const actor = formatActors(notification);
+  const title = notification?.work_title ? `《${notification.work_title}》` : "";
+  switch (notification?.event_type) {
+    case "work_comment":
+      return `${actor} 评论了你的作品${title}`;
+    case "comment_reply":
+      return `${actor} 回复了你的评论`;
+    case "work_like":
+      return `${actor} 赞了你的作品${title}`;
+    case "follow":
+      return `${actor} 关注了你`;
+    case "work_bookmark":
+      return `${actor} 收藏了你的作品${title}`;
+    case "comment_like":
+      return `${actor} 赞了你的评论`;
+    default:
+      return `${actor} 与你互动了`;
+  }
 }
 
 export function filterAndSortWorks(works = [], filters = {}) {

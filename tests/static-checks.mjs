@@ -19,7 +19,7 @@ test("HTML 使用独立样式和模块脚本并包含可访问弹窗", async () 
   assert.doesNotMatch(html, /<style[\s>]/i);
 });
 
-test("移动端底部导航使用四个已批准入口", async () => {
+test("移动端底部导航使用五个已批准入口", async () => {
   const html = await readFile(new URL("../index.html", import.meta.url), "utf8");
   const navigation = html.match(
     /<nav[^>]+class="mobile-bottom-nav"[\s\S]*?<\/nav>/,
@@ -27,12 +27,14 @@ test("移动端底部导航使用四个已批准入口", async () => {
 
   assert.ok(navigation, "缺少移动端底部导航");
   assert.deepEqual(
-    [...navigation.matchAll(/<a[^>]*>\s*([^<]+?)\s*<\/a>/g)].map((match) =>
-      match[1].trim(),
+    // 取每个锚点首个文本节点（消息入口含未读角标 <span>，需在标签处截断）
+    [...navigation.matchAll(/<a[^>]*>\s*([^<]+?)\s*(?:<\/a>|<)/g)].map(
+      (match) => match[1].trim(),
     ),
-    ["翻阅", "讨论", "写作", "我的"],
+    ["翻阅", "讨论", "写作", "消息", "我的"],
   );
   assert.match(navigation, /data-return-hash="__current-profile__"/);
+  assert.match(navigation, /#\/notifications/);
 });
 
 test("登录返回目标可在会话建立后解析为当前用户主页", async () => {
@@ -451,4 +453,18 @@ test("阅读页支持选区批注、浮动入口与批注列表", async () => {
   assert.match(app, /getSelection\(\)/);
   assert.match(app, /data-annotatable/);
   assert.match(app, /quote_text/);
+});
+
+test("顶部账号菜单与移动底部导航提供私密社交入口", async () => {
+  const html = await readFile(new URL("../index.html", import.meta.url), "utf8");
+  const menu = html.match(/<div\s+class="account-menu"[\s\S]*?<\/div>/)?.[0];
+  assert.ok(menu, "缺少顶部账号菜单");
+  for (const href of ["#/notifications", "#/my/bookmarks", "#/my/following", "#/my/followers"]) {
+    assert.match(menu, new RegExp(href.replace("#/", "#\\/")));
+  }
+  const mobileNav = html.match(
+    /<nav[^>]+class="mobile-bottom-nav"[\s\S]*?<\/nav>/,
+  )?.[0];
+  assert.match(mobileNav, /id="notificationsNavBadge"/);
+  assert.match(mobileNav, /data-nav="notifications"/);
 });

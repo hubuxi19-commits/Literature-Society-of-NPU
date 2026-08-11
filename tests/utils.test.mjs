@@ -7,6 +7,9 @@ import {
   maskEmail,
   formatDate,
   formatDateTime,
+  formatRelativeTime,
+  formatActors,
+  buildNotificationText,
   getPenNameChangeAvailability,
   PEN_NAME_CHANGE_INTERVAL_MS,
   createExcerpt,
@@ -157,6 +160,81 @@ test("作品版本与编辑路由解析到对应页面", () => {
   });
   assert.deepEqual(parseRoute("#/works/w1"), { name: "work", id: "w1" });
   assert.deepEqual(parseRoute("#/works/w1/other"), { name: "not-found" });
+});
+
+test("社交路由解析到通知与我的关注/粉丝/收藏", () => {
+  assert.deepEqual(parseRoute("#/notifications"), { name: "notifications" });
+  assert.deepEqual(parseRoute("#/my/following"), { name: "my-following" });
+  assert.deepEqual(parseRoute("#/my/followers"), { name: "my-followers" });
+  assert.deepEqual(parseRoute("#/my/bookmarks"), { name: "my-bookmarks" });
+  assert.deepEqual(parseRoute("#/my/"), { name: "not-found" });
+  assert.deepEqual(parseRoute("#/my/following/extra"), { name: "not-found" });
+});
+
+test("相对时间格式化：从刚发生到超过一年回退日期", () => {
+  const now = new Date("2026-08-10T12:00:00+08:00").getTime();
+  const at = (minutesAgo) => new Date(now - minutesAgo * 60000).toISOString();
+  assert.equal(formatRelativeTime(at(0.1), now), "刚刚");
+  assert.equal(formatRelativeTime(at(5), now), "5 分钟前");
+  assert.equal(formatRelativeTime(at(59), now), "59 分钟前");
+  assert.equal(formatRelativeTime(at(60), now), "1 小时前");
+  assert.equal(formatRelativeTime(at(23 * 60), now), "23 小时前");
+  assert.equal(formatRelativeTime(at(24 * 60), now), "昨天");
+  assert.equal(formatRelativeTime(at(3 * 24 * 60), now), "3 天前");
+  assert.equal(formatRelativeTime(at(14 * 24 * 60), now), "2 周前");
+  assert.equal(formatRelativeTime(at(120 * 24 * 60), now), "4 个月前");
+  assert.equal(formatRelativeTime("", now), "");
+});
+
+test("通知条目文案：单人、多人折叠 +N 与按事件类型拼接", () => {
+  const singleFollow = {
+    event_type: "follow",
+    actor_pen_names: ["白露"],
+    actor_count: 1,
+    work_title: null,
+  };
+  assert.equal(buildNotificationText(singleFollow), "白露 关注了你");
+
+  const multiLike = {
+    event_type: "work_like",
+    actor_pen_names: ["编辑部", "白露", "杏雨"],
+    actor_count: 6,
+    work_title: "末班车经过友谊校区",
+  };
+  assert.equal(
+    buildNotificationText(multiLike),
+    "编辑部、白露、杏雨 等 6 人 赞了你的作品《末班车经过友谊校区》",
+  );
+
+  const twoActors = {
+    event_type: "work_bookmark",
+    actor_pen_names: ["编辑部", "白露"],
+    actor_count: 2,
+    work_title: "河流向北",
+  };
+  assert.equal(buildNotificationText(twoActors), "编辑部、白露 收藏了你的作品《河流向北》");
+
+  const reply = { event_type: "comment_reply", actor_pen_names: ["杏雨"], actor_count: 1, work_title: null };
+  assert.equal(buildNotificationText(reply), "杏雨 回复了你的评论");
+
+  const commentLike = { event_type: "comment_like", actor_pen_names: ["松声"], actor_count: 1, work_title: null };
+  assert.equal(buildNotificationText(commentLike), "松声 赞了你的评论");
+
+  const unknown = { event_type: "unknown", actor_pen_names: [], actor_count: 0, work_title: null };
+  assert.equal(buildNotificationText(unknown), "有人 与你互动了");
+});
+
+test("通知 actor 文案：计数超过预览长度时追加等 N 人", () => {
+  assert.equal(
+    formatActors({ actor_pen_names: ["编辑部", "白露", "杏雨"], actor_count: 6 }),
+    "编辑部、白露、杏雨 等 6 人",
+  );
+  assert.equal(
+    formatActors({ actor_pen_names: ["编辑部", "白露"], actor_count: 2 }),
+    "编辑部、白露",
+  );
+  assert.equal(formatActors({ actor_pen_names: ["白露"], actor_count: 1 }), "白露");
+  assert.equal(formatActors({ actor_pen_names: [], actor_count: 0 }), "有人");
 });
 
 test("作品按关键词、分类和热度过滤排序且不修改输入", () => {

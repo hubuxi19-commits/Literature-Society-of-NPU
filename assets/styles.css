@@ -312,6 +312,28 @@ img {
   color: var(--vermilion);
 }
 
+.nav-badge {
+  display: inline-block;
+  min-width: 1rem;
+  margin-left: 0.35rem;
+  padding: 0 0.28rem;
+  border-radius: 999px;
+  background: var(--vermilion);
+  color: var(--paper);
+  font-family: var(--utility);
+  font-size: 0.7rem;
+  line-height: 1.15rem;
+  text-align: center;
+  vertical-align: top;
+}
+
+.mobile-bottom-nav .nav-badge {
+  position: absolute;
+  top: 0.15rem;
+  right: calc(50% - 1.7rem);
+  margin-left: 0;
+}
+
 .menu-toggle {
   display: none;
   background: transparent;
@@ -2088,7 +2110,7 @@ main {
     z-index: 60;
     display: grid;
     min-height: calc(var(--mobile-nav-height) + env(safe-area-inset-bottom));
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(5, 1fr);
     padding: 0.35rem 0.4rem env(safe-area-inset-bottom);
     border-top: 1px solid var(--rule);
     background: rgb(251 248 241 / 97%);
@@ -2097,6 +2119,7 @@ main {
   }
 
   .mobile-bottom-nav a {
+    position: relative;
     display: grid;
     min-height: 44px;
     place-items: center;
