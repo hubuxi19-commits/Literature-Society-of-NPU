@@ -12,6 +12,7 @@ import {
 } from "./mobile-feed.mjs";
 import {
   buildCommentTree,
+  buildNotificationText,
   CATEGORIES,
   codepointLength,
   codepointSlice,
@@ -20,6 +21,7 @@ import {
   filterAndSortWorks,
   formatDate,
   formatDateTime,
+  formatRelativeTime,
   getPenNameChangeAvailability,
   isPoetryCategory,
   normalizeCategory,
@@ -84,6 +86,16 @@ const state = {
     loading: false,
   },
   discussionRequestId: 0,
+  notifications: {
+    items: [],
+    nextCursor: null,
+    loading: false,
+  },
+  myList: {
+    items: [],
+    nextCursor: null,
+    loading: false,
+  },
   mobileFeed: {
     controller: null,
     signature: "",
@@ -209,8 +221,11 @@ function updateHeader() {
       ? (link.dataset.nav === "home" && ["home", "work"].includes(route.name)) ||
         link.dataset.nav === route.name ||
         (link.dataset.nav === "my" &&
-          route.name === "author" &&
-          route.id === state.session?.profile?.id)
+          (route.name === "author"
+            ? route.id === state.session?.profile?.id
+            : ["my-following", "my-followers", "my-bookmarks"].includes(
+                route.name,
+              )))
       : (link.dataset.nav === "home" &&
           ["home", "work", "author", "write"].includes(route.name)) ||
         link.dataset.nav === route.name;
@@ -2819,6 +2834,385 @@ function renderSubmissions() {
   replaceContent(app, shell);
 }
 
+async function refreshNotificationBadge() {
+  const menuBadge = document.querySelector("#menuNotificationsBadge");
+  const navBadge = document.querySelector("#notificationsNavBadge");
+  let unread = 0;
+  if (state.session) {
+    try {
+      const result = await service.getNotificationUnreadCount();
+      unread = Number(result.unread_count) || 0;
+    } catch {
+      unread = 0;
+    }
+  }
+  for (const badge of [menuBadge, navBadge]) {
+    if (!badge) continue;
+    if (unread === 0) {
+      badge.hidden = true;
+      badge.textContent = "";
+      badge.removeAttribute("aria-label");
+    } else {
+      badge.hidden = false;
+      badge.textContent = unread > 99 ? "99+" : String(unread);
+      badge.setAttribute("aria-label", `${unread} 条未读消息`);
+    }
+  }
+}
+
+// 通知条目的跳转目标：作品类事件指向作品页；评论类事件指向评论所在作品；
+// follow 无目标（服务端不返回 actor id），仅标记已读，不跳转。
+function notificationTarget(notification) {
+  const workId =
+    notification?.target_work_id || notification?.comment_work_id || null;
+  if (workId) return `#/works/${encodeURIComponent(workId)}`;
+  return null;
+}
+
+async function loadNotificationsPage({ reset = true } = {}) {
+  if (reset) {
+    state.notifications.items = [];
+    state.notifications.nextCursor = null;
+  }
+  state.notifications.loading = true;
+  try {
+    const result = await service.listNotifications(
+      reset ? null : state.notifications.nextCursor,
+      20,
+    );
+    state.notifications.items = reset
+      ? result.notifications
+      : [...state.notifications.items, ...result.notifications];
+    state.notifications.nextCursor = result.nextCursor;
+    state.notifications.loading = false;
+  } catch (error) {
+    state.notifications.loading = false;
+    if (reset) {
+      showError("消息暂时无法加载", error.message, true);
+    } else {
+      showToast(error.message);
+    }
+    return;
+  }
+  if (parseRoute(window.location.hash).name === "notifications") {
+    renderNotificationsList();
+  }
+}
+
+async function renderNotifications() {
+  showLoading("正在整理消息");
+  if (!state.session) {
+    const shell = element("div", { className: "page-shell auth-gate" }, [
+      element("p", { className: "eyebrow", text: "NOTIFICATIONS" }),
+      element("h2", { text: "登录后查看消息" }),
+      element("p", {
+        text: "评论、回复、点赞、关注与收藏的动态会集中出现在这里。",
+      }),
+      element("button", {
+        className: "primary-button",
+        type: "button",
+        text: "登录",
+        dataset: { action: "open-auth", returnHash: "#/notifications" },
+      }),
+    ]);
+    replaceContent(app, shell);
+    return;
+  }
+  await loadNotificationsPage({ reset: true });
+}
+
+function renderNotificationsList() {
+  const shell = element("div", { className: "page-shell" });
+  const head = element(
+    "header",
+    { className: "page-header notification-head" },
+    [
+      element("div", {}, [
+        element("p", { className: "eyebrow", text: "NOTIFICATIONS" }),
+        element("h1", { text: "消息" }),
+        element("p", {
+          text: "与你作品和互动相关的动态，同类事件会合并为一条。",
+        }),
+      ]),
+      state.notifications.items.some((item) => !item.is_read)
+        ? element("button", {
+            className: "secondary-button",
+            type: "button",
+            text: "全部已读",
+            dataset: { action: "mark-all-notifications-read" },
+          })
+        : null,
+    ],
+  );
+  const list = element("ol", { className: "notification-list" });
+  state.notifications.items.forEach((notification) => {
+    const unread = notification.is_read !== true;
+    const item = element("li", {
+      className: unread
+        ? "notification-item unread"
+        : "notification-item",
+      dataset: { notificationId: notification.id },
+    });
+    item.append(
+      element("button", {
+        className: "notification-row",
+        type: "button",
+        dataset: {
+          action: "open-notification",
+          notificationId: notification.id,
+        },
+        attrs: {
+          "aria-label": `${buildNotificationText(notification)}。${unread ? "未读" : "已读"}`,
+        },
+      }, [
+        element("span", {
+          className: "notification-text",
+          text: buildNotificationText(notification),
+        }),
+        element("time", {
+          className: "notification-time",
+          text: formatRelativeTime(notification.last_event_at),
+          attrs: { datetime: notification.last_event_at },
+        }),
+      ]),
+    );
+    list.append(item);
+  });
+  if (!state.notifications.items.length) {
+    list.append(
+      element("li", {
+        className: "empty-state",
+        text: "还没有消息。有人评论、回复、点赞或关注你时，会出现在这里。",
+      }),
+    );
+  }
+  shell.append(head, list);
+  if (state.notifications.nextCursor) {
+    shell.append(
+      element("div", { className: "load-more-row" }, [
+        element("button", {
+          className: "primary-button",
+          type: "button",
+          text: "更多消息",
+          dataset: { action: "load-more-notifications" },
+        }),
+      ]),
+    );
+  }
+  replaceContent(app, shell);
+}
+
+async function handleOpenNotification(button) {
+  const notificationId = button.dataset.notificationId;
+  const notification = state.notifications.items.find(
+    (item) => item.id === notificationId,
+  );
+  if (!notification) return;
+  if (notification.is_read !== true) {
+    try {
+      await service.markNotificationRead(notificationId);
+      notification.is_read = true;
+    } catch (error) {
+      showToast(`消息状态没有保存：${error.message}`);
+      return;
+    }
+    await refreshNotificationBadge();
+  }
+  const target = notificationTarget(notification);
+  if (target) {
+    window.location.hash = target;
+  } else {
+    renderNotificationsList();
+  }
+}
+
+async function handleMarkAllNotificationsRead() {
+  if (!state.session) return;
+  try {
+    await service.markAllNotificationsRead();
+    state.notifications.items.forEach((item) => {
+      item.is_read = true;
+    });
+    await refreshNotificationBadge();
+    if (parseRoute(window.location.hash).name === "notifications") {
+      renderNotificationsList();
+    }
+  } catch (error) {
+    showToast(`消息没有全部标为已读：${error.message}`);
+  }
+}
+
+const MY_LIST_META = {
+  following: {
+    eyebrow: "FOLLOWING",
+    title: "我关注的人",
+    description: "你关注的人发布新作后，会出现在你的消息里。",
+    empty: "还没有关注任何人。去作品页关注喜欢的作者。",
+  },
+  followers: {
+    eyebrow: "FOLLOWERS",
+    title: "关注我的人",
+    description: "关注列表彼此保密，这里只展示对方的公开资料。",
+    empty: "还没有人关注你。",
+  },
+  bookmarks: {
+    eyebrow: "BOOKMARKS",
+    title: "我的收藏",
+    description: "只有你自己能看到收藏列表。",
+    empty: "还没有收藏任何作品。",
+  },
+};
+
+async function loadMyListPage(kind, { reset = true } = {}) {
+  if (reset) {
+    state.myList.items = [];
+    state.myList.nextCursor = null;
+  }
+  state.myList.loading = true;
+  try {
+    const cursor = reset ? null : state.myList.nextCursor;
+    const result =
+      kind === "following"
+        ? await service.listMyFollowing(cursor, 20)
+        : kind === "followers"
+          ? await service.listMyFollowers(cursor, 20)
+          : await service.listMyBookmarks(cursor, 20);
+    const rows = result[kind] ?? [];
+    state.myList.items = reset ? rows : [...state.myList.items, ...rows];
+    state.myList.nextCursor = result.nextCursor;
+    state.myList.loading = false;
+  } catch (error) {
+    state.myList.loading = false;
+    if (reset) {
+      showError("列表暂时无法加载", error.message, true);
+    } else {
+      showToast(error.message);
+    }
+    return;
+  }
+  if (parseRoute(window.location.hash).name === `my-${kind}`) {
+    renderMyListPage(kind);
+  }
+}
+
+async function renderMyListPageRoute(kind) {
+  showLoading("正在整理列表");
+  const meta = MY_LIST_META[kind];
+  if (!state.session) {
+    const shell = element("div", { className: "page-shell auth-gate" }, [
+      element("p", { className: "eyebrow", text: meta.eyebrow }),
+      element("h2", { text: `登录后查看${meta.title}` }),
+      element("button", {
+        className: "primary-button",
+        type: "button",
+        text: "登录",
+        dataset: { action: "open-auth", returnHash: `#/my/${kind}` },
+      }),
+    ]);
+    replaceContent(app, shell);
+    return;
+  }
+  await loadMyListPage(kind, { reset: true });
+}
+
+function createBookmarkRow(bookmark) {
+  const article = element("article", {
+    className: "work-row",
+    dataset: { workId: bookmark.id },
+  });
+  const margin = element("aside", {
+    className: "work-margin",
+    attrs: { "aria-label": "作品分类" },
+  });
+  margin.append(
+    element("span", { text: normalizeCategory(bookmark.category) }),
+  );
+  const body = element("div", { className: "work-body" });
+  const title = element("h3");
+  title.append(
+    element("a", {
+      href: `#/works/${encodeURIComponent(bookmark.id)}`,
+      text: bookmark.title,
+    }),
+  );
+  const meta = element("div", { className: "work-meta" }, [
+    element("span", {
+      className: "meta-link",
+      text: bookmark.author_pen_name,
+    }),
+    element("time", {
+      text: `收藏于 ${formatDate(bookmark.created_at)}`,
+      attrs: { datetime: bookmark.created_at },
+    }),
+  ]);
+  body.append(
+    title,
+    meta,
+    element("p", {
+      className: "work-excerpt",
+      text: bookmark.excerpt || "已删除作品",
+    }),
+  );
+  article.append(margin, body);
+  return article;
+}
+
+function renderMyListPage(kind) {
+  const meta = MY_LIST_META[kind];
+  const shell = element("div", { className: "page-shell" });
+  shell.append(createPageHeader(meta.eyebrow, meta.title, meta.description));
+  const list =
+    kind === "bookmarks"
+      ? element("div", { className: "author-work-list" })
+      : element("ol", { className: "member-list" });
+  if (kind === "bookmarks") {
+    state.myList.items.forEach((bookmark) =>
+      list.append(createBookmarkRow(bookmark)),
+    );
+  } else {
+    state.myList.items.forEach((member) => {
+      const row = element("li", { className: "member-row" });
+      row.append(
+        element("a", {
+          className: "member-name",
+          href: `#/authors/${encodeURIComponent(member.id)}`,
+          text: member.pen_name,
+        }),
+        element("p", {
+          className: "member-bio",
+          text: member.bio || "这位作者还没有留下简介。",
+        }),
+        element("time", {
+          className: "member-time",
+          text:
+            kind === "following"
+              ? `关注于 ${formatDate(member.created_at)}`
+              : formatDate(member.created_at),
+          attrs: { datetime: member.created_at },
+        }),
+      );
+      list.append(row);
+    });
+  }
+  if (!state.myList.items.length) {
+    list.append(element("div", { className: "empty-state", text: meta.empty }));
+  }
+  shell.append(list);
+  if (state.myList.nextCursor) {
+    shell.append(
+      element("div", { className: "load-more-row" }, [
+        element("button", {
+          className: "primary-button",
+          type: "button",
+          text: "更多",
+          dataset: { action: "load-more-my-list", myListKind: kind },
+        }),
+      ]),
+    );
+  }
+  replaceContent(app, shell);
+}
+
 function renderNotFound() {
   replaceContent(
     app,
@@ -2864,6 +3258,7 @@ async function renderCurrentRoute() {
     .querySelector(".menu-toggle")
     .setAttribute("aria-expanded", "false");
   updateHeader();
+  refreshNotificationBadge();
   const route = parseRoute(window.location.hash);
   if (previousRouteName === "home") writeHomeScroll(window.scrollY || 0);
   previousRouteName = route.name;
@@ -2879,6 +3274,10 @@ async function renderCurrentRoute() {
     else if (route.name === "account-security") await renderAccountSecurity();
     else if (route.name === "discussions") await loadDiscussionsPage({ reset: true });
     else if (route.name === "submissions") renderSubmissions();
+    else if (route.name === "notifications") await renderNotifications();
+    else if (route.name === "my-following") await renderMyListPageRoute("following");
+    else if (route.name === "my-followers") await renderMyListPageRoute("followers");
+    else if (route.name === "my-bookmarks") await renderMyListPageRoute("bookmarks");
     else renderNotFound();
   } finally {
     if (route.name === "home") {
@@ -3042,6 +3441,7 @@ async function handleAuthSubmit(form, mode) {
     form.reset();
     closeAuth();
     updateHeader();
+    await refreshNotificationBadge();
     await refreshWorks();
     const welcomeMessage =
       mode === "login"
@@ -3257,6 +3657,16 @@ document.addEventListener("click", async (event) => {
   } else if (action === "load-more-discussions") {
     if (state.browseDiscussions.loading) return;
     loadDiscussionsPage({ reset: false });
+  } else if (action === "open-notification") {
+    await handleOpenNotification(trigger);
+  } else if (action === "mark-all-notifications-read") {
+    await handleMarkAllNotificationsRead();
+  } else if (action === "load-more-notifications") {
+    if (state.notifications.loading) return;
+    loadNotificationsPage({ reset: false });
+  } else if (action === "load-more-my-list") {
+    if (state.myList.loading) return;
+    loadMyListPage(trigger.dataset.myListKind, { reset: false });
   } else if (action === "retry-browse") {
     loadBrowseWorks({ reset: true });
   } else if (action === "retry-browse-more") {

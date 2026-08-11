@@ -483,6 +483,50 @@ test("样式提供社交反应区与评论点赞激活态", async () => {
   );
 });
 
+test("通知页渲染、未读角标、已读与跳转目标齐备", async () => {
+  const app = await readFile(new URL("../js/app.js", import.meta.url), "utf8");
+  assert.match(app, /function\s+renderNotifications\s*\(/);
+  assert.match(app, /renderNotificationsList\s*\(/);
+  assert.match(app, /service\.listNotifications\(/);
+  assert.match(app, /service\.getNotificationUnreadCount\(/);
+  assert.match(app, /service\.markNotificationRead\(/);
+  assert.match(app, /service\.markAllNotificationsRead\(/);
+  assert.match(app, /refreshNotificationBadge\s*\(/);
+  assert.match(app, /action:\s*"mark-all-notifications-read"/);
+  assert.match(app, /action:\s*"load-more-notifications"/);
+  assert.match(app, /action:\s*"open-notification"/);
+  assert.match(app, /notificationTarget\s*\(/);
+  assert.match(app, /formatRelativeTime\(notification\.last_event_at\)/);
+  assert.match(app, /buildNotificationText\(notification\)/);
+  assert.match(app, /notification-item unread/);
+});
+
+test("我的关注/粉丝/收藏页经 owner 作用域 RPC 分页加载", async () => {
+  const app = await readFile(new URL("../js/app.js", import.meta.url), "utf8");
+  assert.match(app, /service\.listMyFollowing\(/);
+  assert.match(app, /service\.listMyFollowers\(/);
+  assert.match(app, /service\.listMyBookmarks\(/);
+  assert.match(app, /renderMyListPageRoute\s*\(/);
+  assert.match(app, /route\.name === "my-following"/);
+  assert.match(app, /route\.name === "my-followers"/);
+  assert.match(app, /route\.name === "my-bookmarks"/);
+  assert.match(app, /"全部已读"/);
+  assert.match(app, /member-list/);
+  assert.match(app, /createBookmarkRow\s*\(/);
+});
+
+test("消息页与我的列表提供样式", async () => {
+  const css = await readFile(
+    new URL("../assets/styles.css", import.meta.url),
+    "utf8",
+  );
+  assert.match(css, /\.notification-list\s*\{/);
+  assert.match(css, /\.notification-row\s*\{[\s\S]*?cursor:\s*pointer/);
+  assert.match(css, /\.notification-item\.unread[\s\S]*?font-weight:\s*600/);
+  assert.match(css, /\.member-list\s*\{/);
+  assert.match(css, /\.member-name\s*\{/);
+});
+
 test("阅读页支持选区批注、浮动入口与批注列表", async () => {
   const app = await readFile(new URL("../js/app.js", import.meta.url), "utf8");
   assert.match(app, /listWorkQuotes\(/);
