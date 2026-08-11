@@ -54,6 +54,10 @@ function createDemoService(config = {}) {
   const state = clone(config.seed ?? demoSeed);
   state.workVersions = state.workVersions ?? new Map(); // work_id -> version 数组
   state.commentQuotes = state.commentQuotes ?? []; // { comment_id, work_id, work_version_id, quote_text, start_offset, end_offset, created_at }
+  state.follows = state.follows ?? [];
+  state.bookmarks = state.bookmarks ?? [];
+  state.commentLikes = state.commentLikes ?? [];
+  state.notifications = state.notifications ?? [];
   state.profiles.forEach((profile) => {
     profile.pen_name_changed_at ??= null;
   });
@@ -265,6 +269,82 @@ function createDemoService(config = {}) {
   const displayStringDemo = (content) =>
     splitDisplayParagraphs(content).join("\n");
 
+  // 通知聚合（与 SQL upsert_notification 口径一致）：
+  // agg_key = event_type + 目标复合串；follow 无目标时以尾部 ':' 占位。
+  // actor_ids 数组头部为最近事件者，cap 3（预览「A、B、C 等 N 人」）。
+  const notificationAggKey = (eventType, targetWorkId, targetCommentId) =>
+    `${eventType}${targetWorkId ? `:${targetWorkId}` : ""}${
+      targetCommentId ? `:${targetCommentId}` : ""
+    }${!targetWorkId && !targetCommentId ? ":" : ""}`;
+
+  const upsertNotification = (
+    recipient,
+    eventType,
+    targetWorkId,
+    targetCommentId,
+    actor,
+  ) => {
+    if (!recipient || !actor || recipient === actor) return;
+    const aggKey = notificationAggKey(
+      eventType,
+      targetWorkId,
+      targetCommentId,
+    );
+    const row = state.notifications.find(
+      (item) => item.user_id === recipient && item.agg_key === aggKey,
+    );
+    const nowIso = now().toISOString();
+    if (!row) {
+      state.notifications.push({
+        id: makeId("notif"),
+        user_id: recipient,
+        event_type: eventType,
+        target_work_id: targetWorkId ?? null,
+        target_comment_id: targetCommentId ?? null,
+        actor_ids: [actor],
+        actor_count: 1,
+        last_event_at: nowIso,
+        is_read: false,
+        agg_key: aggKey,
+      });
+      return;
+    }
+    if (row.actor_ids.includes(actor)) {
+      row.last_event_at = nowIso;
+      return;
+    }
+    row.actor_ids = [actor, ...row.actor_ids.slice(0, 2)];
+    row.actor_count += 1;
+    row.last_event_at = nowIso;
+  };
+
+  const removeNotificationActor = (
+    recipient,
+    eventType,
+    targetWorkId,
+    targetCommentId,
+    actor,
+  ) => {
+    if (!recipient || !actor || recipient === actor) return;
+    const aggKey = notificationAggKey(
+      eventType,
+      targetWorkId,
+      targetCommentId,
+    );
+    const index = state.notifications.findIndex(
+      (item) => item.user_id === recipient && item.agg_key === aggKey,
+    );
+    if (index < 0) return;
+    const row = state.notifications[index];
+    if (!row.actor_ids.includes(actor)) return;
+    if (row.actor_count <= 1) {
+      state.notifications.splice(index, 1);
+      return;
+    }
+    row.actor_ids = row.actor_ids.filter((item) => item !== actor);
+    row.actor_count -= 1;
+  };
+
   // 构造期回填：为种子作品预先生成第 1 版快照并回填 current_version_id，
   // 与 SQL 迁移中的幂等回填一致，避免 listWorks/getWork 暴露 null 指针。
   state.works.forEach(ensureVersion1);
@@ -420,6 +500,7 @@ function createDemoService(config = {}) {
       if (!state.works.some((work) => work.id === workId)) {
         throw new Error("作品不存在");
       }
+      const work = state.works.find((item) => item.id === workId);
       const index = state.likes.findIndex(
         (like) =>
           like.work_id === workId && like.user_id === current.profile.id,
@@ -428,12 +509,26 @@ function createDemoService(config = {}) {
       if (index >= 0) {
         state.likes.splice(index, 1);
         liked = false;
+        removeNotificationActor(
+          work.author_id,
+          "work_like",
+          workId,
+          null,
+          current.profile.id,
+        );
       } else {
         state.likes.push({
           work_id: workId,
           user_id: current.profile.id,
         });
         liked = true;
+        upsertNotification(
+          work.author_id,
+          "work_like",
+          workId,
+          null,
+          current.profile.id,
+        );
       }
       return {
         liked,
@@ -467,6 +562,25 @@ function createDemoService(config = {}) {
         updated_at: now,
       };
       state.comments.push(comment);
+      const work = state.works.find((item) => item.id === workId);
+      if (parentId) {
+        const parent = state.comments.find((item) => item.id === parentId);
+        upsertNotification(
+          parent.user_id,
+          "comment_reply",
+          null,
+          parentId,
+          current.profile.id,
+        );
+      } else {
+        upsertNotification(
+          work.author_id,
+          "work_comment",
+          workId,
+          null,
+          current.profile.id,
+        );
+      }
       return enrichComment(comment);
     },
 
@@ -480,6 +594,33 @@ function createDemoService(config = {}) {
       comment.is_deleted = true;
       comment.content = "";
       comment.updated_at = new Date().toISOString();
+      // 通知维护：顶层评论撤销 work_comment；回复撤销 comment_reply；清除该评论的 comment_like 通知
+      const work = state.works.find((item) => item.id === comment.work_id);
+      if (comment.parent_id) {
+        const parent = state.comments.find((item) => item.id === comment.parent_id);
+        removeNotificationActor(
+          parent?.user_id ?? null,
+          "comment_reply",
+          null,
+          comment.parent_id,
+          comment.user_id,
+        );
+      } else {
+        removeNotificationActor(
+          work?.author_id ?? null,
+          "work_comment",
+          comment.work_id,
+          null,
+          comment.user_id,
+        );
+      }
+      state.notifications = state.notifications.filter(
+        (item) =>
+          !(
+            item.event_type === "comment_like" &&
+            item.target_comment_id === comment.id
+          ),
+      );
       return enrichComment(comment);
     },
 
@@ -661,6 +802,13 @@ function createDemoService(config = {}) {
         created_at: now,
       };
       state.commentQuotes.push(quote);
+      upsertNotification(
+        work.author_id,
+        "work_comment",
+        work.id,
+        null,
+        current.profile.id,
+      );
       return { comment: enrichComment(comment), quote };
     },
 
@@ -727,6 +875,372 @@ function createDemoService(config = {}) {
       work.is_featured = Boolean(featured);
       work.updated_at = new Date().toISOString();
       return { id: work.id, is_featured: work.is_featured };
+    },
+
+    // ---- 私密社交（发布四）----
+
+    async followUser(targetUserId) {
+      const current = requireVerifiedSession();
+      if (targetUserId === current.profile.id) throw new Error("不能关注自己");
+      if (!getProfileRecord(targetUserId)) throw new Error("关注对象不存在");
+      const existing = state.follows.find(
+        (item) =>
+          item.follower_id === current.profile.id &&
+          item.following_id === targetUserId,
+      );
+      if (!existing) {
+        state.follows.push({
+          follower_id: current.profile.id,
+          following_id: targetUserId,
+          created_at: now().toISOString(),
+        });
+      }
+      upsertNotification(targetUserId, "follow", null, null, current.profile.id);
+      const row = existing ?? {
+        follower_id: current.profile.id,
+        following_id: targetUserId,
+      };
+      return { follower_id: row.follower_id, following_id: row.following_id };
+    },
+
+    async unfollowUser(targetUserId) {
+      const current = requireVerifiedSession();
+      state.follows = state.follows.filter(
+        (item) =>
+          !(
+            item.follower_id === current.profile.id &&
+            item.following_id === targetUserId
+          ),
+      );
+      removeNotificationActor(
+        targetUserId,
+        "follow",
+        null,
+        null,
+        current.profile.id,
+      );
+    },
+
+    async bookmarkWork(workId) {
+      const current = requireVerifiedSession();
+      const work = state.works.find((item) => item.id === workId);
+      if (!work) throw new Error("作品不存在");
+      if (
+        work.status !== "published" &&
+        work.author_id !== current.profile.id &&
+        !isAdmin()
+      ) {
+        throw new Error("作品不存在");
+      }
+      const existing = state.bookmarks.some(
+        (item) =>
+          item.user_id === current.profile.id && item.work_id === workId,
+      );
+      if (!existing) {
+        state.bookmarks.push({
+          user_id: current.profile.id,
+          work_id: workId,
+          created_at: now().toISOString(),
+        });
+      }
+      upsertNotification(
+        work.author_id,
+        "work_bookmark",
+        workId,
+        null,
+        current.profile.id,
+      );
+      return { user_id: current.profile.id, work_id: workId };
+    },
+
+    async unbookmarkWork(workId) {
+      const current = requireVerifiedSession();
+      state.bookmarks = state.bookmarks.filter(
+        (item) =>
+          !(item.user_id === current.profile.id && item.work_id === workId),
+      );
+      const work = state.works.find((item) => item.id === workId);
+      if (work) {
+        removeNotificationActor(
+          work.author_id,
+          "work_bookmark",
+          workId,
+          null,
+          current.profile.id,
+        );
+      }
+    },
+
+    async likeComment(commentId) {
+      const current = requireVerifiedSession();
+      const comment = state.comments.find((item) => item.id === commentId);
+      if (!comment) throw new Error("评论不存在");
+      if (comment.user_id === current.profile.id) throw new Error("不能赞自己的评论");
+      const existing = state.commentLikes.some(
+        (item) =>
+          item.user_id === current.profile.id && item.comment_id === commentId,
+      );
+      if (!existing) {
+        state.commentLikes.push({
+          user_id: current.profile.id,
+          comment_id: commentId,
+          created_at: now().toISOString(),
+        });
+      }
+      upsertNotification(
+        comment.user_id,
+        "comment_like",
+        null,
+        commentId,
+        current.profile.id,
+      );
+      return { user_id: current.profile.id, comment_id: commentId };
+    },
+
+    async unlikeComment(commentId) {
+      const current = requireVerifiedSession();
+      state.commentLikes = state.commentLikes.filter(
+        (item) =>
+          !(item.user_id === current.profile.id && item.comment_id === commentId),
+      );
+      const comment = state.comments.find((item) => item.id === commentId);
+      if (comment) {
+        removeNotificationActor(
+          comment.user_id,
+          "comment_like",
+          null,
+          commentId,
+          current.profile.id,
+        );
+      }
+    },
+
+    async listNotifications(cursor, pageSize = 20) {
+      const current = requireSession();
+      const limit = Math.min(Math.max(Number(pageSize) || 20, 1), 20);
+      const rows = state.notifications
+        .filter((item) => item.user_id === current.profile.id)
+        .map((item) => {
+          const work = state.works.find(
+            (w) => w.id === item.target_work_id,
+          );
+          const comment = state.comments.find(
+            (c) => c.id === item.target_comment_id,
+          );
+          return {
+            id: item.id,
+            event_type: item.event_type,
+            target_work_id: item.target_work_id,
+            target_comment_id: item.target_comment_id,
+            actor_pen_names: item.actor_ids.map(
+              (actorId) => getProfileRecord(actorId)?.pen_name ?? "佚名",
+            ),
+            actor_count: item.actor_count,
+            last_event_at: item.last_event_at,
+            is_read: item.is_read,
+            work_title: work?.title ?? null,
+            comment_work_id: comment?.work_id ?? null,
+          };
+        })
+        .sort(
+          (left, right) =>
+            new Date(right.last_event_at) - new Date(left.last_event_at) ||
+            String(left.id).localeCompare(String(right.id)),
+        );
+      const start = decodeCursor(cursor);
+      const page = rows.slice(start, start + limit);
+      return {
+        notifications: page,
+        nextCursor:
+          start + page.length < rows.length
+            ? encodeCursor(start + page.length)
+            : null,
+      };
+    },
+
+    async getNotificationUnreadCount() {
+      const current = requireSession();
+      return {
+        unread_count: state.notifications.filter(
+          (item) =>
+            item.user_id === current.profile.id && item.is_read === false,
+        ).length,
+      };
+    },
+
+    async markNotificationRead(notificationId) {
+      requireSession();
+      const row = state.notifications.find((item) => item.id === notificationId);
+      if (row) row.is_read = true;
+    },
+
+    async markAllNotificationsRead() {
+      const current = requireSession();
+      state.notifications
+        .filter((item) => item.user_id === current.profile.id)
+        .forEach((item) => {
+          item.is_read = true;
+        });
+    },
+
+    async listMyFollowing(cursor, pageSize = 20) {
+      const current = requireSession();
+      const limit = Math.min(Math.max(Number(pageSize) || 20, 1), 20);
+      const rows = state.follows
+        .filter((item) => item.follower_id === current.profile.id)
+        .map((item) => {
+          const profile = getProfileRecord(item.following_id);
+          return {
+            id: item.following_id,
+            pen_name: profile?.pen_name ?? "佚名",
+            bio: profile?.bio ?? "",
+            created_at: item.created_at,
+          };
+        })
+        .sort(
+          (left, right) =>
+            new Date(right.created_at) - new Date(left.created_at) ||
+            String(right.id).localeCompare(String(left.id)),
+        );
+      const start = decodeCursor(cursor);
+      const page = rows.slice(start, start + limit);
+      return {
+        following: page,
+        nextCursor:
+          start + page.length < rows.length
+            ? encodeCursor(start + page.length)
+            : null,
+      };
+    },
+
+    async listMyFollowers(cursor, pageSize = 20) {
+      const current = requireSession();
+      const limit = Math.min(Math.max(Number(pageSize) || 20, 1), 20);
+      const rows = state.follows
+        .filter((item) => item.following_id === current.profile.id)
+        .map((item) => {
+          const profile = getProfileRecord(item.follower_id);
+          return {
+            id: item.follower_id,
+            pen_name: profile?.pen_name ?? "佚名",
+            bio: profile?.bio ?? "",
+            created_at: item.created_at,
+          };
+        })
+        .sort(
+          (left, right) =>
+            new Date(right.created_at) - new Date(left.created_at) ||
+            String(right.id).localeCompare(String(left.id)),
+        );
+      const start = decodeCursor(cursor);
+      const page = rows.slice(start, start + limit);
+      return {
+        followers: page,
+        nextCursor:
+          start + page.length < rows.length
+            ? encodeCursor(start + page.length)
+            : null,
+      };
+    },
+
+    async listMyBookmarks(cursor, pageSize = 20) {
+      const current = requireSession();
+      const limit = Math.min(Math.max(Number(pageSize) || 20, 1), 20);
+      const rows = state.bookmarks
+        .filter((item) => item.user_id === current.profile.id)
+        .map((item) => {
+          const work = state.works.find((w) => w.id === item.work_id);
+          const author = work ? getProfileRecord(work.author_id) : null;
+          return {
+            id: item.work_id,
+            title: work?.title ?? "已删除作品",
+            excerpt: work?.excerpt ?? "",
+            category: work?.category ?? "",
+            author_pen_name: author?.pen_name ?? "佚名",
+            created_at: item.created_at,
+          };
+        })
+        .sort(
+          (left, right) =>
+            new Date(right.created_at) - new Date(left.created_at) ||
+            String(right.id).localeCompare(String(left.id)),
+        );
+      const start = decodeCursor(cursor);
+      const page = rows.slice(start, start + limit);
+      return {
+        bookmarks: page,
+        nextCursor:
+          start + page.length < rows.length
+            ? encodeCursor(start + page.length)
+            : null,
+      };
+    },
+
+    async getWorkSocialCounts(workId) {
+      const work = state.works.find((item) => item.id === workId);
+      if (!work) throw new Error("作品不存在");
+      if (
+        work.status !== "published" &&
+        work.author_id !== session?.profile?.id &&
+        !isAdmin()
+      ) {
+        throw new Error("作品不存在");
+      }
+      return {
+        bookmark_count: state.bookmarks.filter(
+          (item) => item.work_id === workId,
+        ).length,
+        bookmarked_by_current_user: Boolean(
+          session &&
+            state.bookmarks.some(
+              (item) =>
+                item.user_id === session.profile.id && item.work_id === workId,
+            ),
+        ),
+      };
+    },
+
+    async getProfileSocialCounts(profileId) {
+      const profile = getProfileRecord(profileId);
+      if (!profile) throw new Error("作者不存在");
+      return {
+        following_count: state.follows.filter(
+          (item) => item.follower_id === profileId,
+        ).length,
+        followers_count: state.follows.filter(
+          (item) => item.following_id === profileId,
+        ).length,
+        followed_by_current_user: Boolean(
+          session &&
+            state.follows.some(
+              (item) =>
+                item.follower_id === session.profile.id &&
+                item.following_id === profileId,
+            ),
+        ),
+      };
+    },
+
+    async getCommentLikeState(commentIds) {
+      const ids = Array.isArray(commentIds) ? commentIds : [];
+      const comments = ids
+        .map((commentId) => {
+          const likes = state.commentLikes.filter(
+            (item) => item.comment_id === commentId,
+          );
+          return {
+            comment_id: commentId,
+            like_count: likes.length,
+            liked_by_current_user: Boolean(
+              session &&
+                likes.some((item) => item.user_id === session.profile.id),
+            ),
+          };
+        })
+        .sort((left, right) =>
+          String(left.comment_id).localeCompare(String(right.comment_id)),
+        );
+      return { comments };
     },
 
     async getAccountSecurityStatus() {
