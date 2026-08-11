@@ -146,7 +146,8 @@ begin
   update public.notifications
   set
     actor_ids = array[p_actor]
-      || (select coalesce(array_agg(u), '{}') from unnest(v_row.actor_ids) u limit 2),
+      || (select coalesce(array_agg(u), '{}')
+          from (select unnest(v_row.actor_ids) u limit 2) s),
     actor_count = v_row.actor_count + 1,
     last_event_at = now(),
     updated_at = now()
@@ -369,6 +370,9 @@ begin
 
   if v_comment.id is null then
     raise exception '评论不存在';
+  end if;
+  if v_comment.user_id = auth.uid() then
+    raise exception '不能赞自己的评论';
   end if;
 
   insert into public.comment_likes (user_id, comment_id)
