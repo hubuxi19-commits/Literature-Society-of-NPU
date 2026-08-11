@@ -96,6 +96,8 @@ const state = {
     nextCursor: null,
     loading: false,
   },
+  notificationsRequestId: 0,
+  myListRequestId: 0,
   mobileFeed: {
     controller: null,
     signature: "",
@@ -2870,6 +2872,7 @@ function notificationTarget(notification) {
 }
 
 async function loadNotificationsPage({ reset = true } = {}) {
+  const requestId = ++state.notificationsRequestId;
   if (reset) {
     state.notifications.items = [];
     state.notifications.nextCursor = null;
@@ -2880,6 +2883,7 @@ async function loadNotificationsPage({ reset = true } = {}) {
       reset ? null : state.notifications.nextCursor,
       20,
     );
+    if (requestId !== state.notificationsRequestId) return;
     state.notifications.items = reset
       ? result.notifications
       : [...state.notifications.items, ...result.notifications];
@@ -3064,6 +3068,7 @@ const MY_LIST_META = {
 };
 
 async function loadMyListPage(kind, { reset = true } = {}) {
+  const requestId = ++state.myListRequestId;
   if (reset) {
     state.myList.items = [];
     state.myList.nextCursor = null;
@@ -3077,6 +3082,7 @@ async function loadMyListPage(kind, { reset = true } = {}) {
         : kind === "followers"
           ? await service.listMyFollowers(cursor, 20)
           : await service.listMyBookmarks(cursor, 20);
+    if (requestId !== state.myListRequestId) return;
     const rows = result[kind] ?? [];
     state.myList.items = reset ? rows : [...state.myList.items, ...rows];
     state.myList.nextCursor = result.nextCursor;
@@ -3145,14 +3151,15 @@ function createBookmarkRow(bookmark) {
       attrs: { datetime: bookmark.created_at },
     }),
   ]);
-  body.append(
-    title,
-    meta,
-    element("p", {
-      className: "work-excerpt",
-      text: bookmark.excerpt || "已删除作品",
-    }),
-  );
+  body.append(title, meta);
+  if (bookmark.excerpt) {
+    body.append(
+      element("p", {
+        className: "work-excerpt",
+        text: bookmark.excerpt,
+      }),
+    );
+  }
   article.append(margin, body);
   return article;
 }
@@ -3195,7 +3202,12 @@ function renderMyListPage(kind) {
     });
   }
   if (!state.myList.items.length) {
-    list.append(element("div", { className: "empty-state", text: meta.empty }));
+    list.append(
+      element(
+        kind === "bookmarks" ? "div" : "li",
+        { className: "empty-state", text: meta.empty },
+      ),
+    );
   }
   shell.append(list);
   if (state.myList.nextCursor) {
