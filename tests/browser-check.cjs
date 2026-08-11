@@ -1261,6 +1261,156 @@ async function accountSecurityFlow(browser, browserMessages) {
   await context.close();
 }
 
+// 桌面视口下移动端底栏 display:none，未读角标以 DOM 状态（hidden + textContent）断言
+async function socialBadgeState(page) {
+  return page.evaluate(() => {
+    const el = document.querySelector("#notificationsNavBadge");
+    return { hidden: el.hidden, text: el.textContent.trim() };
+  });
+}
+
+async function socialFlow(browser, browserMessages) {
+  const context = await browser.newContext({
+    viewport: { width: 1440, height: 1000 },
+  });
+  const page = await context.newPage();
+  await useDemoConfig(page);
+  page.setDefaultTimeout(8000);
+  page.on("console", (message) => {
+    if (message.type() === "error") {
+      browserMessages.push(`social console: ${message.text()}`);
+    }
+  });
+  page.on("pageerror", (error) => {
+    browserMessages.push(`social pageerror: ${error.message}`);
+  });
+
+  await page.goto(baseUrl);
+  await page.waitForLoadState("networkidle");
+
+  // 登录松声：2 条未读（notif-1/notif-2），未读角标显示 2
+  await login(page, "2023123456", "wenyuan88");
+  let badge = await socialBadgeState(page);
+  if (badge.hidden || badge.text !== "2") {
+    throw new Error(`未读角标应为 2，实际 ${badge.text}`);
+  }
+
+  // 通知页：3 条、2 条未读、聚合文案正确、全部已读按钮存在
+  await goToHash(page, "#/notifications", "消息");
+  if ((await page.locator(".notification-item").count()) !== 3) {
+    throw new Error("通知页应有 3 条");
+  }
+  if ((await page.locator(".notification-item.unread").count()) !== 2) {
+    throw new Error("通知页未读高亮条数错误");
+  }
+  const firstText = await page
+    .locator(".notification-item .notification-text")
+    .first()
+    .textContent();
+  if (!firstText.includes("白露 评论了你的作品")) {
+    throw new Error(`通知文案错误：${firstText}`);
+  }
+  await expectVisible(
+    page.getByRole("button", { name: "全部已读" }),
+    "全部已读按钮",
+  );
+
+  // 点击第一条通知 → 标记已读 + 跳转作品页；返回后未读减 1，角标变 1
+  await page.locator(".notification-row").first().click();
+  await page.waitForURL(/#\/works\/work-night-bus$/);
+  await page.locator(".reading-title h1").waitFor();
+  await goToHash(page, "#/notifications", "消息");
+  if ((await page.locator(".notification-item.unread").count()) !== 1) {
+    throw new Error("点击通知后未读条数没有减少");
+  }
+  badge = await socialBadgeState(page);
+  if (badge.hidden || badge.text !== "1") {
+    throw new Error(`标记一条已读后角标应为 1，实际 ${badge.text}`);
+  }
+
+  // 全部已读 → 无未读高亮、角标隐藏
+  await page.getByRole("button", { name: "全部已读" }).click();
+  if ((await page.locator(".notification-item.unread").count()) !== 0) {
+    throw new Error("全部已读后仍有未读高亮");
+  }
+  badge = await socialBadgeState(page);
+  if (!badge.hidden) {
+    throw new Error("全部已读后角标仍显示");
+  }
+
+  // 作品页评论点赞：comment-1 已赞 1（松声赞了白露的评论）；comment-2 赞 1 且是松声自己的回复，
+  // self-like 会被数据层拒绝、保持 赞 1，因此切换用 comment-1：取消赞 → 赞 0，再点恢复 → 已赞 1。
+  await goToHash(page, "#/works/work-night-bus", "末班车经过友谊校区");
+  const likeButtons = page.locator(".comment-like-button");
+  if ((await likeButtons.count()) < 2) {
+    throw new Error("评论行没有渲染点赞按钮");
+  }
+  const firstLike = likeButtons.nth(0);
+  if (!/^已赞 1$/.test(await firstLike.textContent())) {
+    throw new Error(`第一条评论点赞状态错误：${await firstLike.textContent()}`);
+  }
+  if (!/^赞 1$/.test(await likeButtons.nth(1).textContent())) {
+    throw new Error(`第二条评论点赞状态错误：${await likeButtons.nth(1).textContent()}`);
+  }
+  await firstLike.click();
+  await page.waitForFunction(
+    () => document.querySelectorAll(".comment-like-button")[0]?.textContent === "赞 0",
+  );
+  await firstLike.click();
+  await page.waitForFunction(
+    () => document.querySelectorAll(".comment-like-button")[0]?.textContent === "已赞 1",
+  );
+
+  // 白露作品页：收藏已收藏 2、关注作者已关注 2
+  await goToHash(page, "#/works/work-river", "河流向北");
+  await expectVisible(
+    page.getByRole("button", { name: /取消收藏/ }),
+    "收藏按钮",
+  );
+  const bookmarkLabel = await page.locator("[data-bookmark-label]").textContent();
+  const bookmarkCount = await page.locator("[data-bookmark-count]").textContent();
+  if (bookmarkLabel !== "已收藏" || bookmarkCount !== "2") {
+    throw new Error(`收藏状态错误：${bookmarkLabel} ${bookmarkCount}`);
+  }
+  await expectVisible(
+    page.getByRole("button", { name: /取消关注作者/ }),
+    "关注作者按钮",
+  );
+  const followLabel = await page.locator("[data-follow-label]").textContent();
+  const followCount = await page.locator("[data-follow-count]").textContent();
+  if (followLabel !== "已关注" || followCount !== "2") {
+    throw new Error(`关注状态错误：${followLabel} ${followCount}`);
+  }
+
+  // 作者页：白露展示公开粉丝数，关注按钮存在
+  await goToHash(page, "#/authors/profile-dew", "白露");
+  const stats = await page.locator(".profile-stats").innerText();
+  if (!stats.includes("粉丝") || !stats.includes("2")) {
+    throw new Error(`作者页没有展示粉丝数：${stats}`);
+  }
+  await expectVisible(
+    page.getByRole("button", { name: /取消关注/ }),
+    "作者页关注按钮",
+  );
+
+  // 我的关注 / 我的收藏页
+  await goToHash(page, "#/my/following", "我关注的人");
+  await expectVisible(page.locator(".member-list"), "关注列表");
+  await goToHash(page, "#/my/bookmarks", "我的收藏");
+  await expectVisible(page.locator(".work-row"), "收藏列表");
+
+  // 未登录访问通知页 → 登录门，角标隐藏
+  await page.locator("#accountButton").click();
+  await page.getByRole("button", { name: "退出登录" }).click();
+  await goToHash(page, "#/notifications", "登录后查看消息");
+  badge = await socialBadgeState(page);
+  if (!badge.hidden) {
+    throw new Error("未登录时消息角标仍显示");
+  }
+
+  await context.close();
+}
+
 (async () => {
   const browserMessages = [];
   const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE;
@@ -1273,6 +1423,7 @@ async function accountSecurityFlow(browser, browserMessages) {
     const mobileScreenshots = await mobileFlow(browser, browserMessages);
     await mobileProfileAuthFlow(browser, browserMessages);
     await accountSecurityFlow(browser, browserMessages);
+    await socialFlow(browser, browserMessages);
     if (browserMessages.length) {
       throw new Error(`浏览器控制台出现错误：\n${browserMessages.join("\n")}`);
     }

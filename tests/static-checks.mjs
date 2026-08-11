@@ -247,6 +247,18 @@ test("浏览器检查保留预览断言但不写入内部导出预览截图", as
   assert.doesNotMatch(browserCheck, /exportPreviewScreenshot|export-preview\.png/);
 });
 
+test("浏览器检查固化私密社交 demo 全流程", async () => {
+  const browserCheck = await readFile(
+    new URL("./browser-check.cjs", import.meta.url),
+    "utf8",
+  );
+  assert.match(browserCheck, /async function socialFlow/);
+  assert.match(browserCheck, /#\/notifications/);
+  assert.match(browserCheck, /comment-like-button/);
+  assert.match(browserCheck, /member-list/);
+  assert.match(browserCheck, /未读角标应为 2/);
+});
+
 test("账号安全页和找回密码表单不公开邮箱", async () => {
   const [html, app] = await Promise.all([
     readFile(new URL("../index.html", import.meta.url), "utf8"),
