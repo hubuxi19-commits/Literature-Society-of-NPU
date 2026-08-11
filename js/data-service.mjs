@@ -1069,8 +1069,12 @@ function createDemoService(config = {}) {
     },
 
     async markNotificationRead(notificationId) {
-      requireSession();
-      const row = state.notifications.find((item) => item.id === notificationId);
+      // 与 SQL mark_notification_read 一致：只允许本人标记自己的通知
+      const current = requireSession();
+      const row = state.notifications.find(
+        (item) =>
+          item.id === notificationId && item.user_id === current.profile.id,
+      );
       if (row) row.is_read = true;
     },
 
@@ -1150,16 +1154,18 @@ function createDemoService(config = {}) {
         .filter((item) => item.user_id === current.profile.id)
         .map((item) => {
           const work = state.works.find((w) => w.id === item.work_id);
-          const author = work ? getProfileRecord(work.author_id) : null;
+          if (work?.status !== "published") return null;
+          const author = getProfileRecord(work.author_id);
           return {
             id: item.work_id,
-            title: work?.title ?? "已删除作品",
-            excerpt: work?.excerpt ?? "",
-            category: work?.category ?? "",
+            title: work.title,
+            excerpt: work.excerpt,
+            category: work.category,
             author_pen_name: author?.pen_name ?? "佚名",
             created_at: item.created_at,
           };
         })
+        .filter(Boolean)
         .sort(
           (left, right) =>
             new Date(right.created_at) - new Date(left.created_at) ||

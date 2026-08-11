@@ -271,3 +271,51 @@ test("演示模式：getProfileSocialCounts 计数公开 + 我的关注态", asy
     1,
   );
 });
+
+test("演示模式：cap-3 聚合 —— 4 个 actor 折叠为 3，头部为最近者", async () => {
+  // 默认种子只有 3 个可登录账号，达不到 cap-3；注入杏雨、原上两个账号做 4 人聚合。
+  const seed = structuredClone(demoSeed);
+  seed.accounts.push(
+    { studentNumber: "2024000001", password: "apricot88", profileId: "profile-apricot" },
+    { studentNumber: "2024000002", password: "wild88", profileId: "profile-wild" },
+  );
+  seed.follows = [];
+  seed.bookmarks = [];
+  seed.commentLikes = [];
+  seed.notifications = [];
+  const service = createDataService({ mode: "demo", seed });
+  const SIGN_APRICOT = { studentNumber: "2024000001", password: "apricot88" };
+  const SIGN_WILD = { studentNumber: "2024000002", password: "wild88" };
+  // 4 个不同用户依次关注白露：editor → wild → apricot → pine（越晚者越“近”）
+  await service.signIn(SIGN.editor);
+  await service.followUser("profile-dew");
+  await service.signIn(SIGN_WILD);
+  await service.followUser("profile-dew");
+  await service.signIn(SIGN_APRICOT);
+  await service.followUser("profile-dew");
+  await service.signIn(SIGN.pine);
+  await service.followUser("profile-dew");
+  // 白露视角：一条 follow 通知，actor 折叠为 3，头为最近者（松声），计数为 4
+  await service.signIn(SIGN.dew);
+  const items = ofType(await service.listNotifications(), "follow");
+  assert.equal(items.length, 1);
+  assert.equal(items[0].actor_count, 4);
+  assert.equal(items[0].actor_pen_names.length, 3);
+  assert.deepEqual(items[0].actor_pen_names, ["松声", "杏雨", "原上"]);
+});
+
+test("演示模式：markNotificationRead 只能标记本人通知", async () => {
+  const service = demoService();
+  await service.signIn(SIGN.pine);
+  // 松声收藏《河流向北》、点赞《小事记》→ 白露收 2 条未读
+  await service.bookmarkWork("work-river");
+  await service.toggleLike("work-small-things");
+  await service.signIn(SIGN.dew);
+  assert.equal((await service.getNotificationUnreadCount()).unread_count, 2);
+  const dewNotifs = (await service.listNotifications()).notifications;
+  // 松声尝试标记白露的通知 → 白露未读数不变（与 SQL mark_notification_read 的 user_id 过滤一致）
+  await service.signIn(SIGN.pine);
+  await service.markNotificationRead(dewNotifs[0].id);
+  await service.signIn(SIGN.dew);
+  assert.equal((await service.getNotificationUnreadCount()).unread_count, 2);
+});

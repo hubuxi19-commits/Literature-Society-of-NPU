@@ -269,20 +269,20 @@ export const demoSeed = {
     },
   ],
   follows: [
-    { follower_id: "profile-dew", following_id: "profile-pine" },
-    { follower_id: "profile-pine", following_id: "profile-dew" },
-    { follower_id: "profile-apricot", following_id: "profile-dew" },
-    { follower_id: "profile-editor", following_id: "profile-pine" },
+    { follower_id: "profile-dew", following_id: "profile-pine", created_at: "2026-07-25T09:00:00+08:00" },
+    { follower_id: "profile-pine", following_id: "profile-dew", created_at: "2026-07-26T10:00:00+08:00" },
+    { follower_id: "profile-apricot", following_id: "profile-dew", created_at: "2026-07-27T11:00:00+08:00" },
+    { follower_id: "profile-editor", following_id: "profile-pine", created_at: "2026-07-28T12:00:00+08:00" },
   ],
   bookmarks: [
-    { user_id: "profile-dew", work_id: "work-night-bus" },
-    { user_id: "profile-pine", work_id: "work-river" },
-    { user_id: "profile-apricot", work_id: "work-river" },
+    { user_id: "profile-dew", work_id: "work-night-bus", created_at: "2026-07-25T13:00:00+08:00" },
+    { user_id: "profile-pine", work_id: "work-river", created_at: "2026-07-26T14:00:00+08:00" },
+    { user_id: "profile-apricot", work_id: "work-river", created_at: "2026-07-27T15:00:00+08:00" },
   ],
   commentLikes: [
-    { user_id: "profile-pine", comment_id: "comment-1" },
-    { user_id: "profile-dew", comment_id: "comment-2" },
-    { user_id: "profile-editor", comment_id: "comment-3" },
+    { user_id: "profile-pine", comment_id: "comment-1", created_at: "2026-07-25T16:00:00+08:00" },
+    { user_id: "profile-dew", comment_id: "comment-2", created_at: "2026-07-26T17:00:00+08:00" },
+    { user_id: "profile-editor", comment_id: "comment-3", created_at: "2026-07-27T18:00:00+08:00" },
   ],
   notifications: [
     {
