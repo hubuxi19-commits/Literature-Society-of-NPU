@@ -521,3 +521,72 @@ test("通知读 RPC：list 笔名解析 + 未读数 + 标记已读/全部已读"
     await db.close();
   }
 });
+
+test("迁移完整性：22 函数齐全 + 授权面 + RLS + 直接表访问已 revoke", async () => {
+  const db = await createDatabase();
+  try {
+    await seed(db);
+    const { rows: funcs } = await db.query(`
+      select proname from pg_proc p
+      join pg_namespace n on n.oid = p.pronamespace
+      where n.nspname = 'public'
+        and proname in (
+          'upsert_notification','remove_notification_actor','follow_user','unfollow_user',
+          'bookmark_work','unbookmark_work','like_comment','unlike_comment',
+          'toggle_like_work','create_comment','create_quoted_comment','soft_delete_comment',
+          'list_notifications','get_notification_unread_count','mark_notification_read',
+          'mark_all_notifications_read','list_my_following','list_my_followers',
+          'list_my_bookmarks','get_work_social_counts','get_profile_social_counts',
+          'get_comment_like_state'
+        )
+    `);
+    assert.equal(funcs.length, 22, "22 个函数齐全");
+    // 公开计数 RPC：anon 可执行
+    assert.equal(
+      (await db.query("select has_function_privilege('anon', 'public.get_work_social_counts(uuid)', 'EXECUTE') as ok")).rows[0].ok, true);
+    assert.equal(
+      (await db.query("select has_function_privilege('anon', 'public.get_profile_social_counts(uuid)', 'EXECUTE') as ok")).rows[0].ok, true);
+    assert.equal(
+      (await db.query("select has_function_privilege('anon', 'public.get_comment_like_state(uuid[])', 'EXECUTE') as ok")).rows[0].ok, true);
+    // 私密列表 RPC：anon 不可执行、authenticated 可执行
+    for (const fn of ["list_notifications", "list_my_following", "list_my_followers", "list_my_bookmarks"]) {
+      assert.equal(
+        (await db.query(`select has_function_privilege('anon', 'public.${fn}(text, integer)', 'EXECUTE') as ok`)).rows[0].ok,
+        false, `${fn} anon 不可执行`);
+      assert.equal(
+        (await db.query(`select has_function_privilege('authenticated', 'public.${fn}(text, integer)', 'EXECUTE') as ok`)).rows[0].ok,
+        true, `${fn} authenticated 可执行`);
+    }
+    // 写 RPC：authenticated 可执行
+    assert.equal(
+      (await db.query("select has_function_privilege('authenticated', 'public.follow_user(uuid)', 'EXECUTE') as ok")).rows[0].ok, true);
+    assert.equal(
+      (await db.query("select has_function_privilege('authenticated', 'public.bookmark_work(uuid)', 'EXECUTE') as ok")).rows[0].ok, true);
+    assert.equal(
+      (await db.query("select has_function_privilege('authenticated', 'public.like_comment(uuid)', 'EXECUTE') as ok")).rows[0].ok, true);
+    assert.equal(
+      (await db.query("select has_function_privilege('authenticated', 'public.toggle_like_work(uuid)', 'EXECUTE') as ok")).rows[0].ok, true);
+    assert.equal(
+      (await db.query("select has_function_privilege('authenticated', 'public.create_comment(uuid, text, uuid)', 'EXECUTE') as ok")).rows[0].ok, true);
+    // helper：无人可执行
+    assert.equal(
+      (await db.query("select has_function_privilege('authenticated', 'public.upsert_notification(uuid, text, uuid, uuid, uuid)', 'EXECUTE') as ok")).rows[0].ok, false);
+    assert.equal(
+      (await db.query("select has_function_privilege('authenticated', 'public.remove_notification_actor(uuid, text, uuid, uuid, uuid)', 'EXECUTE') as ok")).rows[0].ok, false);
+    // 4 张新表 RLS 开启 + authenticated 无表级权限
+    for (const tbl of ["follows", "bookmarks", "comment_likes", "notifications"]) {
+      const { rows } = await db.query(
+        `select relrowsecurity from pg_class c join pg_namespace n on n.oid = c.relnamespace
+         where n.nspname = 'public' and c.relname = $1`, [tbl]);
+      assert.equal(rows[0].relrowsecurity, true, `${tbl} RLS 开启`);
+      assert.equal(
+        (await db.query(`select has_table_privilege('authenticated', 'public.${tbl}', 'SELECT') as ok`)).rows[0].ok,
+        false, `${tbl} authenticated SELECT 被 revoke`);
+      assert.equal(
+        (await db.query(`select has_table_privilege('authenticated', 'public.${tbl}', 'INSERT') as ok`)).rows[0].ok,
+        false, `${tbl} authenticated INSERT 被 revoke`);
+    }
+  } finally {
+    await db.close();
+  }
+});
