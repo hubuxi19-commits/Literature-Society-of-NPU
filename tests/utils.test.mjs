@@ -183,6 +183,7 @@ test("相对时间格式化：从刚发生到超过一年回退日期", () => {
   assert.equal(formatRelativeTime(at(3 * 24 * 60), now), "3 天前");
   assert.equal(formatRelativeTime(at(14 * 24 * 60), now), "2 周前");
   assert.equal(formatRelativeTime(at(120 * 24 * 60), now), "4 个月前");
+  assert.equal(formatRelativeTime(at(400 * 24 * 60), now), "2025年7月6日");
   assert.equal(formatRelativeTime("", now), "");
 });
 
