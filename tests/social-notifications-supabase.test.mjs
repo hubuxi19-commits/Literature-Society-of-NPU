@@ -290,10 +290,18 @@ test("Supabase 服务：我的关注/粉丝/收藏列表 next_cursor→nextCurso
   const followers = await service.listMyFollowers();
   assert.equal(followers.followers.length, 1);
   assert.equal(followers.followers[0].pen_name, "杏雨");
+  assert.deepEqual(invoked.at(-1), [
+    "list_my_followers",
+    { p_cursor: null, p_page_size: 20 },
+  ]);
 
   const bookmarks = await service.listMyBookmarks();
   assert.equal(bookmarks.bookmarks.length, 1);
   assert.equal(bookmarks.bookmarks[0].author_pen_name, "白露");
+  assert.deepEqual(invoked.at(-1), [
+    "list_my_bookmarks",
+    { p_cursor: null, p_page_size: 20 },
+  ]);
 });
 
 test("Supabase 服务：公开聚合计数与我的状态", async () => {
@@ -335,4 +343,24 @@ test("Supabase 服务：公开聚合计数与我的状态", async () => {
     "get_comment_like_state",
     { p_comment_ids: ["c-1", "c-2"] },
   ]);
+});
+
+test("Supabase 服务：公开计数读取无需登录", async () => {
+  const { service, invoked } = supabaseService();
+  // 不调用 getSession()：getWorkSocialCounts/getProfileSocialCounts/getCommentLikeState 是公开读接口
+  assert.deepEqual(await service.getWorkSocialCounts("work-1"), {
+    bookmark_count: 5,
+    bookmarked_by_current_user: true,
+  });
+  assert.deepEqual(invoked.at(-1), [
+    "get_work_social_counts",
+    { p_work_id: "work-1" },
+  ]);
+  assert.deepEqual(await service.getProfileSocialCounts("u-2"), {
+    following_count: 2,
+    followers_count: 7,
+    followed_by_current_user: true,
+  });
+  const state = await service.getCommentLikeState(["c-1", "c-2"]);
+  assert.equal(state.comments.length, 2);
 });
