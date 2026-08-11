@@ -1618,6 +1618,10 @@ main {
   list-style: none;
 }
 
+.member-list .empty-state {
+  border-top: none;
+}
+
 .member-row {
   padding: 1.8rem 0;
   border-top: 1px solid var(--rule);

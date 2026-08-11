@@ -2890,6 +2890,7 @@ async function loadNotificationsPage({ reset = true } = {}) {
     state.notifications.nextCursor = result.nextCursor;
     state.notifications.loading = false;
   } catch (error) {
+    if (requestId !== state.notificationsRequestId) return;
     state.notifications.loading = false;
     if (reset) {
       showError("消息暂时无法加载", error.message, true);
@@ -3088,6 +3089,7 @@ async function loadMyListPage(kind, { reset = true } = {}) {
     state.myList.nextCursor = result.nextCursor;
     state.myList.loading = false;
   } catch (error) {
+    if (requestId !== state.myListRequestId) return;
     state.myList.loading = false;
     if (reset) {
       showError("列表暂时无法加载", error.message, true);
