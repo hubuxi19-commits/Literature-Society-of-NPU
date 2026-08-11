@@ -746,10 +746,13 @@ async function mobileFlow(browser, browserMessages) {
   const bottomNavigation = page.locator(".mobile-bottom-nav");
   await expectVisible(bottomNavigation, "移动端底部导航");
   const bottomLinks = bottomNavigation.locator("a");
-  assert.deepEqual(await bottomLinks.allTextContents(), ["翻阅", "讨论", "写作", "我的"]);
+  assert.deepEqual(
+    (await bottomLinks.allTextContents()).map((text) => text.trim()),
+    ["翻阅", "讨论", "写作", "消息", "我的"],
+  );
   assert.deepEqual(
     await bottomLinks.evaluateAll((links) => links.map((link) => link.getAttribute("href"))),
-    ["#/", "#/discussions", "#/write", "#/"],
+    ["#/", "#/discussions", "#/write", "#/notifications", "#/"],
   );
 
   const categoryStrip = page.getByRole("navigation", { name: "作品分类" });
