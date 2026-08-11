@@ -377,3 +377,147 @@ test("write_gate=enforce 时未验证邮箱的写交互被拒，绑定后放行"
     await db.close();
   }
 });
+
+test("作品点赞 toggle 往返：发/撤 work_like 通知", async () => {
+  const db = await createDatabase();
+  try {
+    await seed(db);
+    const { rows: on } = await asRole(db, "authenticated", USER_B,
+      "select public.toggle_like_work($1) as payload", [WORK_1]);
+    assert.equal(on[0].payload.liked, true);
+    assert.equal(on[0].payload.like_count, 1);
+    let aRows = await notificationsFor(db, USER_A);
+    assert.equal(aRows.length, 1);
+    assert.equal(aRows[0].event_type, "work_like");
+    assert.equal(aRows[0].target_work_id, WORK_1);
+    assert.deepEqual(aRows[0].actor_ids, [USER_B]);
+    // 取消赞 → work_like 通知删除（count 归零删行）
+    const { rows: off } = await asRole(db, "authenticated", USER_B,
+      "select public.toggle_like_work($1) as payload", [WORK_1]);
+    assert.equal(off[0].payload.liked, false);
+    assert.equal(off[0].payload.like_count, 0);
+    aRows = await notificationsFor(db, USER_A);
+    assert.equal(aRows.length, 0, "取消赞后 work_like 通知删除");
+  } finally {
+    await db.close();
+  }
+});
+
+test("评论/回复产生通知：顶层 work_comment 聚合、回复 comment_reply", async () => {
+  const db = await createDatabase();
+  try {
+    await seed(db);
+    // C 顶层评论 WORK_1 → A 收 work_comment
+    await asRole(db, "authenticated", USER_C,
+      "select public.create_comment($1, $2, null)", [WORK_1, "C 的顶层评论"]);
+    // D 顶层评论 WORK_1 → work_comment 聚合 +N
+    await asRole(db, "authenticated", ADMIN_D,
+      "select public.create_comment($1, $2, null)", [WORK_1, "D 的顶层评论"]);
+    const aRows = await notificationsFor(db, USER_A);
+    const wc = aRows.find((r) => r.event_type === "work_comment");
+    assert.ok(wc, "A 收到 work_comment");
+    assert.equal(wc.actor_count, 2);
+    assert.equal(wc.target_work_id, WORK_1);
+    // D 回复 COMMENT_1（作者 B）→ B 收 comment_reply
+    await asRole(db, "authenticated", ADMIN_D,
+      "select public.create_comment($1, $2, $3)", [WORK_1, "回复评论一", COMMENT_1]);
+    const bRows = await notificationsFor(db, USER_B);
+    const cr = bRows.find((r) => r.event_type === "comment_reply");
+    assert.ok(cr, "B 收到 comment_reply");
+    assert.equal(cr.target_comment_id, COMMENT_1);
+    assert.deepEqual(cr.actor_ids, [ADMIN_D]);
+  } finally {
+    await db.close();
+  }
+});
+
+test("批注（quoted comment）产生 work_comment 通知", async () => {
+  const db = await createDatabase();
+  try {
+    await seed(db);
+    // 为 WORK_1 建一个版本（full-schema 加载不回填版本）
+    const { rows: ver } = await asRole(db, "authenticated", USER_A, `
+      select public.create_work_version($1, null, '末班车', '友谊校区', '散文',
+        E'第一段正文。\n\n第二段正文。', '初次发布') as payload
+    `, [WORK_1]);
+    const versionId = ver[0].payload.version_id;
+    // C 批注 WORK_1 → A 收 work_comment
+    await asRole(db, "authenticated", USER_C, `
+      select public.create_quoted_comment($1, $2, '第一段正文。', 0, 6, '批注内容') as payload
+    `, [WORK_1, versionId]);
+    const aRows = await notificationsFor(db, USER_A);
+    const wc = aRows.find((r) => r.event_type === "work_comment");
+    assert.ok(wc, "A 收到 work_comment");
+    assert.deepEqual(wc.actor_ids, [USER_C]);
+  } finally {
+    await db.close();
+  }
+});
+
+test("soft_delete_comment 撤销 work_comment 聚合并清理该评论的 comment_like 通知", async () => {
+  const db = await createDatabase();
+  try {
+    await seed(db);
+    // C 顶层评论 WORK_1 → A 收 work_comment
+    const { rows: created } = await asRole(db, "authenticated", USER_C,
+      "select public.create_comment($1, $2, null) as payload", [WORK_1, "待删评论"]);
+    const newCommentId = created[0].payload.id;
+    // B 点赞该评论 → C 收 comment_like
+    await asRole(db, "authenticated", USER_B, "select public.like_comment($1)", [newCommentId]);
+    assert.equal((await notificationsFor(db, USER_C)).length, 1);
+    // C 软删自己的评论
+    await asRole(db, "authenticated", USER_C, "select public.soft_delete_comment($1)", [newCommentId]);
+    // A 的 work_comment 聚合撤销（唯一 actor → 删行）
+    const aRows = await notificationsFor(db, USER_A);
+    assert.equal(aRows.find((r) => r.event_type === "work_comment"), undefined, "work_comment 撤销");
+    // C 的 comment_like 通知被清理
+    assert.equal((await notificationsFor(db, USER_C)).length, 0, "comment_like 通知清理");
+    // 评论本身已软删
+    const { rows: cm } = await db.query(
+      "select is_deleted from public.comments where id = $1", [newCommentId]);
+    assert.equal(cm[0].is_deleted, true);
+  } finally {
+    await db.close();
+  }
+});
+
+test("通知读 RPC：list 笔名解析 + 未读数 + 标记已读/全部已读", async () => {
+  const db = await createDatabase();
+  try {
+    await seed(db);
+    // B 关注 A、C 关注 A → A follow 通知（聚合 2）
+    await asRole(db, "authenticated", USER_B, "select public.follow_user($1)", [USER_A]);
+    await asRole(db, "authenticated", USER_C, "select public.follow_user($1)", [USER_A]);
+    // B 点赞 WORK_1 → A work_like
+    await asRole(db, "authenticated", USER_B, "select public.toggle_like_work($1)", [WORK_1]);
+    // 未读数 = 2
+    const { rows: unread } = await asRole(db, "authenticated", USER_A,
+      "select public.get_notification_unread_count() as payload");
+    assert.equal(unread[0].payload.unread_count, 2);
+    // list：两条，按 event_type 定位
+    const { rows: list } = await asRole(db, "authenticated", USER_A,
+      "select public.list_notifications(null, 20) as payload");
+    const items = list[0].payload.notifications;
+    assert.equal(items.length, 2);
+    const follow = items.find((n) => n.event_type === "follow");
+    const like = items.find((n) => n.event_type === "work_like");
+    assert.ok(follow && like, "两种通知都在");
+    assert.deepEqual(follow.actor_pen_names, ["杏雨", "白露"], "最近者居前");
+    assert.equal(follow.actor_count, 2);
+    assert.equal(like.actor_pen_names[0], "白露");
+    assert.equal(like.work_title, "末班车");
+    // 标记单条已读 → 未读 1
+    await asRole(db, "authenticated", USER_A,
+      "select public.mark_notification_read($1)", [follow.id]);
+    const { rows: afterOne } = await asRole(db, "authenticated", USER_A,
+      "select public.get_notification_unread_count() as payload");
+    assert.equal(afterOne[0].payload.unread_count, 1);
+    // 全部已读 → 0
+    await asRole(db, "authenticated", USER_A, "select public.mark_all_notifications_read()");
+    const { rows: allRead } = await asRole(db, "authenticated", USER_A,
+      "select public.get_notification_unread_count() as payload");
+    assert.equal(allRead[0].payload.unread_count, 0);
+  } finally {
+    await db.close();
+  }
+});
