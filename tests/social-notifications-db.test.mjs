@@ -230,3 +230,150 @@ test("不同目标独立聚合（agg_key 唯一）：同一 actor 点赞/收藏�
     await db.close();
   }
 });
+
+test("关注往返：列表 owner 可见、计数公开、取关归零", async () => {
+  const db = await createDatabase();
+  try {
+    await seed(db);
+    // A 关注 B
+    const { rows: followRows } = await asRole(db, "authenticated", USER_A,
+      "select public.follow_user($1) as payload", [USER_B]);
+    assert.equal(followRows[0].payload.following_id, USER_B);
+    // A 的关注列表（owner）
+    const { rows: following } = await asRole(db, "authenticated", USER_A,
+      "select public.list_my_following(null, 20) as payload");
+    assert.equal(following[0].payload.following.length, 1);
+    assert.equal(following[0].payload.following[0].pen_name, "白露");
+    // B 的粉丝列表（owner 侧）
+    const { rows: followers } = await asRole(db, "authenticated", USER_B,
+      "select public.list_my_followers(null, 20) as payload");
+    assert.equal(followers[0].payload.followers.length, 1);
+    assert.equal(followers[0].payload.followers[0].id, USER_A);
+    // 公开计数：B 的 followers_count=1，A 视角 followed_by_current_user=true
+    const { rows: counts } = await asRole(db, "authenticated", USER_A,
+      "select public.get_profile_social_counts($1) as payload", [USER_B]);
+    assert.equal(counts[0].payload.followers_count, 1);
+    assert.equal(counts[0].payload.following_count, 0);
+    assert.equal(counts[0].payload.followed_by_current_user, true);
+    // anon 也能读公开计数（无登录态 → followed_by_current_user=false）
+    const { rows: anonCounts } = await asRole(db, "anon", null,
+      "select public.get_profile_social_counts($1) as payload", [USER_B]);
+    assert.equal(anonCounts[0].payload.followers_count, 1);
+    assert.equal(anonCounts[0].payload.followed_by_current_user, false);
+    // 取关 → 计数归零、B 粉丝列表空
+    await asRole(db, "authenticated", USER_A, "select public.unfollow_user($1)", [USER_B]);
+    const { rows: after } = await asRole(db, "authenticated", USER_B,
+      "select public.list_my_followers(null, 20) as payload");
+    assert.equal(after[0].payload.followers.length, 0);
+  } finally {
+    await db.close();
+  }
+});
+
+test("收藏往返：计数公开 + 我的收藏态、列表私密、取消归零", async () => {
+  const db = await createDatabase();
+  try {
+    await seed(db);
+    // B 收藏 WORK_1（作者 A）
+    const { rows: bm } = await asRole(db, "authenticated", USER_B,
+      "select public.bookmark_work($1) as payload", [WORK_1]);
+    assert.equal(bm[0].payload.work_id, WORK_1);
+    // 公开计数：bookmark_count=1，B 视角 bookmarked_by_current_user=true
+    const { rows: counts } = await asRole(db, "authenticated", USER_B,
+      "select public.get_work_social_counts($1) as payload", [WORK_1]);
+    assert.equal(counts[0].payload.bookmark_count, 1);
+    assert.equal(counts[0].payload.bookmarked_by_current_user, true);
+    // anon 视角：计数可见、态为 false
+    const { rows: anonCounts } = await asRole(db, "anon", null,
+      "select public.get_work_social_counts($1) as payload", [WORK_1]);
+    assert.equal(anonCounts[0].payload.bookmark_count, 1);
+    assert.equal(anonCounts[0].payload.bookmarked_by_current_user, false);
+    // B 的收藏列表（owner）
+    const { rows: list } = await asRole(db, "authenticated", USER_B,
+      "select public.list_my_bookmarks(null, 20) as payload");
+    assert.equal(list[0].payload.bookmarks.length, 1);
+    assert.equal(list[0].payload.bookmarks[0].title, "末班车");
+    assert.equal(list[0].payload.bookmarks[0].author_pen_name, "松声");
+    // 幂等：重复收藏不重复计数
+    await asRole(db, "authenticated", USER_B, "select public.bookmark_work($1)", [WORK_1]);
+    const { rows: after } = await asRole(db, "authenticated", USER_B,
+      "select public.get_work_social_counts($1) as payload", [WORK_1]);
+    assert.equal(after[0].payload.bookmark_count, 1);
+    // 取消收藏 → 计数归零
+    await asRole(db, "authenticated", USER_B, "select public.unbookmark_work($1)", [WORK_1]);
+    const { rows: zero } = await asRole(db, "authenticated", USER_B,
+      "select public.get_work_social_counts($1) as payload", [WORK_1]);
+    assert.equal(zero[0].payload.bookmark_count, 0);
+  } finally {
+    await db.close();
+  }
+});
+
+test("评论点赞往返：计数公开 + 我的点赞态、取消归零、禁止赞自己", async () => {
+  const db = await createDatabase();
+  try {
+    await seed(db);
+    // A 点赞 B 的顶层评论 COMMENT_1
+    const { rows: liked } = await asRole(db, "authenticated", USER_A,
+      "select public.like_comment($1) as payload", [COMMENT_1]);
+    assert.equal(liked[0].payload.comment_id, COMMENT_1);
+    // 公开态：like_count=1，A 视角 liked_by_current_user=true
+    const { rows: state } = await asRole(db, "authenticated", USER_A,
+      "select public.get_comment_like_state(array[$1::uuid]) as payload", [COMMENT_1]);
+    assert.equal(state[0].payload.comments[0].like_count, 1);
+    assert.equal(state[0].payload.comments[0].liked_by_current_user, true);
+    // anon 视角：计数可见、态为 false
+    const { rows: anonState } = await asRole(db, "anon", null,
+      "select public.get_comment_like_state(array[$1::uuid]) as payload", [COMMENT_1]);
+    assert.equal(anonState[0].payload.comments[0].like_count, 1);
+    assert.equal(anonState[0].payload.comments[0].liked_by_current_user, false);
+    // 幂等：重复点赞不重复计数
+    await asRole(db, "authenticated", USER_A, "select public.like_comment($1)", [COMMENT_1]);
+    const { rows: after } = await asRole(db, "authenticated", USER_A,
+      "select public.get_comment_like_state(array[$1::uuid]) as payload", [COMMENT_1]);
+    assert.equal(after[0].payload.comments[0].like_count, 1);
+    // 取消点赞 → 归零，且 comment_id 仍在返回中（零赞评论不并入 NULL 组）
+    await asRole(db, "authenticated", USER_A, "select public.unlike_comment($1)", [COMMENT_1]);
+    const { rows: zero } = await asRole(db, "authenticated", USER_A,
+      "select public.get_comment_like_state(array[$1::uuid]) as payload", [COMMENT_1]);
+    assert.equal(zero[0].payload.comments[0].comment_id, COMMENT_1);
+    assert.equal(zero[0].payload.comments[0].like_count, 0);
+    assert.equal(zero[0].payload.comments[0].liked_by_current_user, false);
+    // 禁止赞自己的评论：C 评论了 COMMENT_1 的回复（COMMENT_2 属 C），C 赞自己的 COMMENT_2 → 被拒
+    const selfLikeError = await expectError(asRole(db, "authenticated", USER_C,
+      "select public.like_comment($1)", [COMMENT_2]));
+    assert.match(selfLikeError.message, /不能赞自己的评论/);
+    assert.equal((await notificationsFor(db, USER_C)).length, 0, "赞自己评论不产生通知");
+  } finally {
+    await db.close();
+  }
+});
+
+test("write_gate=enforce 时未验证邮箱的写交互被拒，绑定后放行", async () => {
+  const db = await createDatabase();
+  try {
+    await seed(db);
+    await db.exec(`
+      update public.site_settings
+      set value = jsonb_set(value, '{write_gate}', '"enforce"'::jsonb, true)
+      where key = 'account_security';
+    `);
+    // USER_B 未绑定找回邮箱 → 所有写交互被拒
+    const followError = await expectError(asRole(db, "authenticated", USER_B,
+      "select public.follow_user($1)", [USER_A]));
+    assert.match(followError.message, /找回邮箱/);
+    const bookmarkError = await expectError(asRole(db, "authenticated", USER_B,
+      "select public.bookmark_work($1)", [WORK_1]));
+    assert.match(bookmarkError.message, /找回邮箱/);
+    // USER_B 绑定后放行
+    await db.exec(`
+      insert into public.account_recovery_emails (user_id, email_normalized, verified_at)
+      values ('${USER_B}', 'b-recovery@x.test', now())
+    `);
+    const { rows } = await asRole(db, "authenticated", USER_B,
+      "select public.follow_user($1) as payload", [USER_A]);
+    assert.equal(rows[0].payload.following_id, USER_A);
+  } finally {
+    await db.close();
+  }
+});
