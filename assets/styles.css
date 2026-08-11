@@ -919,6 +919,13 @@ main {
   color: var(--vermilion);
 }
 
+.work-reactions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
 .admin-actions {
   display: flex;
   gap: 1rem;
@@ -1204,6 +1211,11 @@ main {
 
 .comment-actions button:hover {
   color: var(--vermilion);
+}
+
+.comment-like-button[aria-pressed="true"] {
+  color: var(--vermilion);
+  font-weight: 600;
 }
 
 .writing-shell {

@@ -1404,7 +1404,7 @@ function setFeaturedLocally(workId, featured) {
   }
 }
 
-function createCommentItem(comment, workId, depth = 0) {
+function createCommentItem(comment, workId, commentLikeMap = new Map(), depth = 0) {
   const item = element("li", {
     className: "comment-item",
     dataset: { commentId: comment.id },
@@ -1432,6 +1432,17 @@ function createCommentItem(comment, workId, depth = 0) {
 
   if (!comment.is_deleted) {
     const actions = element("div", { className: "comment-actions" });
+    const likeState = commentLikeMap.get(comment.id);
+    const commentLiked = Boolean(likeState?.liked_by_current_user);
+    actions.append(
+      element("button", {
+        className: "comment-like-button",
+        type: "button",
+        text: `${commentLiked ? "已赞" : "赞"} ${likeState?.like_count ?? 0}`,
+        dataset: { action: "toggle-comment-like", commentId: comment.id },
+        attrs: { "aria-pressed": String(commentLiked) },
+      }),
+    );
     if (state.session) {
       actions.append(
         element("button", {
@@ -1481,7 +1492,9 @@ function createCommentItem(comment, workId, depth = 0) {
   if (comment.replies?.length) {
     const replies = element("ol", { className: "comment-replies" });
     comment.replies.forEach((reply) => {
-      replies.append(createCommentItem(reply, workId, depth + 1));
+      replies.append(
+        createCommentItem(reply, workId, commentLikeMap, depth + 1),
+      );
     });
     item.append(replies);
   }
@@ -1622,6 +1635,18 @@ async function renderWork(workId) {
       service.listWorkQuotes(workId),
     ]);
     state.currentWork = work;
+    const [socialCounts, profileSocial, commentLikeState] = await Promise.all([
+      service.getWorkSocialCounts(workId),
+      service.getProfileSocialCounts(work.author_id),
+      work.comments.length
+        ? service.getCommentLikeState(
+            work.comments.map((comment) => comment.id),
+          )
+        : Promise.resolve({ comments: [] }),
+    ]);
+    const commentLikeMap = new Map(
+      commentLikeState.comments.map((item) => [item.comment_id, item]),
+    );
     const shell = element("div", { className: "reading-shell" });
     const head = element("header", { className: "reading-head" });
     const margin = element("aside", { className: "reading-margin" }, [
@@ -1669,7 +1694,56 @@ async function renderWork(workId) {
         dataset: { likeCount: work.id },
       }),
     );
-    actionBar.append(likeButton);
+    const bookmarkButton = element("button", {
+      className: "like-button",
+      type: "button",
+      dataset: { action: "toggle-bookmark", workId: work.id },
+      attrs: {
+        "aria-pressed": String(socialCounts.bookmarked_by_current_user),
+        "aria-label": socialCounts.bookmarked_by_current_user
+          ? "取消收藏"
+          : "收藏这篇作品",
+      },
+    });
+    bookmarkButton.append(
+      element("span", {
+        text: socialCounts.bookmarked_by_current_user ? "已收藏" : "收藏",
+        dataset: { bookmarkLabel: work.id },
+      }),
+      element("span", {
+        text: String(socialCounts.bookmark_count),
+        dataset: { bookmarkCount: work.id },
+      }),
+    );
+    const reactions = element("div", { className: "work-reactions" }, [
+      likeButton,
+      bookmarkButton,
+    ]);
+    if (state.session?.profile.id !== work.author_id) {
+      const followButton = element("button", {
+        className: "like-button",
+        type: "button",
+        dataset: { action: "toggle-follow-author", authorId: work.author_id },
+        attrs: {
+          "aria-pressed": String(profileSocial.followed_by_current_user),
+          "aria-label": profileSocial.followed_by_current_user
+            ? "取消关注作者"
+            : "关注作者",
+        },
+      });
+      followButton.append(
+        element("span", {
+          text: profileSocial.followed_by_current_user ? "已关注" : "关注",
+          dataset: { followLabel: work.author_id },
+        }),
+        element("span", {
+          text: String(profileSocial.followers_count),
+          dataset: { followCount: work.author_id },
+        }),
+      );
+      reactions.append(followButton);
+    }
+    actionBar.append(reactions);
     actionBar.append(
       element("a", {
         className: "secondary-button",
@@ -1837,7 +1911,7 @@ async function renderWork(workId) {
     const roots = buildCommentTree(work.comments);
     if (roots.length) {
       roots.forEach((comment) =>
-        commentTree.append(createCommentItem(comment, work.id)),
+        commentTree.append(createCommentItem(comment, work.id, commentLikeMap)),
       );
     } else {
       commentTree.append(
@@ -2451,7 +2525,10 @@ const accountSecurityActions = {
 async function renderAuthor(profileId) {
   showLoading("正在整理作者作品");
   try {
-    const profile = await service.getProfile(profileId);
+    const [profile, profileSocial] = await Promise.all([
+      service.getProfile(profileId),
+      service.getProfileSocialCounts(profileId),
+    ]);
     if (state.session?.profile.id === profile.id) {
       Object.assign(state.session.profile, {
         pen_name: profile.pen_name,
@@ -2491,12 +2568,39 @@ async function renderAuthor(profileId) {
           }),
         ]),
       );
+    } else {
+      const followButton = element("button", {
+        className: "like-button",
+        type: "button",
+        dataset: { action: "toggle-follow-author", authorId: profile.id },
+        attrs: {
+          "aria-pressed": String(profileSocial.followed_by_current_user),
+          "aria-label": profileSocial.followed_by_current_user
+            ? "取消关注"
+            : "关注该作者",
+        },
+      });
+      followButton.append(
+        element("span", {
+          text: profileSocial.followed_by_current_user ? "已关注" : "关注",
+          dataset: { followLabel: profile.id },
+        }),
+        element("span", {
+          text: String(profileSocial.followers_count),
+          dataset: { followCount: profile.id },
+        }),
+      );
+      identity.append(
+        element("div", { className: "profile-actions" }, [followButton]),
+      );
     }
     const stats = element("dl", { className: "profile-stats" });
     [
       ["作品", profile.work_count],
       ["获赞", profile.total_likes],
       ["评论", profile.comment_count],
+      ["关注", profileSocial.following_count],
+      ["粉丝", profileSocial.followers_count],
     ].forEach(([label, value]) => {
       stats.append(
         element("div", {}, [
@@ -2995,6 +3099,107 @@ async function handleLike(button) {
   }
 }
 
+// 收藏与关注的乐观更新结构一致：aria-pressed 切换激活态、计数 ±1，
+// 服务端返回后以实际结果为准，失败回滚原状态。
+async function handleBookmark(button) {
+  if (!requireVerifiedWrite(window.location.hash)) return;
+  const workId = button.dataset.workId;
+  const countNode = button.querySelector(
+    `[data-bookmark-count="${CSS.escape(workId)}"]`,
+  );
+  const labelNode = button.querySelector(
+    `[data-bookmark-label="${CSS.escape(workId)}"]`,
+  );
+  const originalPressed = button.getAttribute("aria-pressed") === "true";
+  const originalCount = Number(countNode.textContent);
+  const optimisticPressed = !originalPressed;
+  button.setAttribute("aria-pressed", String(optimisticPressed));
+  labelNode.textContent = optimisticPressed ? "已收藏" : "收藏";
+  countNode.textContent = String(
+    Math.max(0, originalCount + (optimisticPressed ? 1 : -1)),
+  );
+  button.disabled = true;
+  try {
+    if (optimisticPressed) {
+      await service.bookmarkWork(workId);
+    } else {
+      await service.unbookmarkWork(workId);
+    }
+  } catch (error) {
+    button.setAttribute("aria-pressed", String(originalPressed));
+    labelNode.textContent = originalPressed ? "已收藏" : "收藏";
+    countNode.textContent = String(originalCount);
+    showToast(`收藏状态没有保存：${error.message}`);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function handleFollowAuthor(button) {
+  if (!requireVerifiedWrite(window.location.hash)) return;
+  const authorId = button.dataset.authorId;
+  const countNode = button.querySelector(
+    `[data-follow-count="${CSS.escape(authorId)}"]`,
+  );
+  const labelNode = button.querySelector(
+    `[data-follow-label="${CSS.escape(authorId)}"]`,
+  );
+  const originalPressed = button.getAttribute("aria-pressed") === "true";
+  const originalCount = Number(countNode.textContent);
+  const optimisticPressed = !originalPressed;
+  button.setAttribute("aria-pressed", String(optimisticPressed));
+  labelNode.textContent = optimisticPressed ? "已关注" : "关注";
+  countNode.textContent = String(
+    Math.max(0, originalCount + (optimisticPressed ? 1 : -1)),
+  );
+  button.disabled = true;
+  try {
+    if (optimisticPressed) {
+      await service.followUser(authorId);
+    } else {
+      await service.unfollowUser(authorId);
+    }
+  } catch (error) {
+    button.setAttribute("aria-pressed", String(originalPressed));
+    labelNode.textContent = originalPressed ? "已关注" : "关注";
+    countNode.textContent = String(originalCount);
+    showToast(`关注状态没有保存：${error.message}`);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function handleCommentLike(button) {
+  if (!requireVerifiedWrite(window.location.hash)) return;
+  const commentId = button.dataset.commentId;
+  const originalPressed = button.getAttribute("aria-pressed") === "true";
+  const originalText = button.textContent;
+  const originalCount = Number(
+    (button.textContent.match(/(\d+)/) ?? [])[1] ?? 0,
+  );
+  const optimisticPressed = !originalPressed;
+  const optimisticCount = Math.max(
+    0,
+    originalCount + (optimisticPressed ? 1 : -1),
+  );
+  button.setAttribute("aria-pressed", String(optimisticPressed));
+  button.textContent = `${optimisticPressed ? "已赞" : "赞"} ${optimisticCount}`;
+  button.disabled = true;
+  try {
+    if (optimisticPressed) {
+      await service.likeComment(commentId);
+    } else {
+      await service.unlikeComment(commentId);
+    }
+  } catch (error) {
+    button.setAttribute("aria-pressed", String(originalPressed));
+    button.textContent = originalText;
+    showToast(`点赞状态没有保存：${error.message}`);
+  } finally {
+    button.disabled = false;
+  }
+}
+
 document.addEventListener("click", async (event) => {
   const trigger = event.target.closest("[data-action]");
   if (!trigger) return;
@@ -3066,6 +3271,12 @@ document.addEventListener("click", async (event) => {
     await initialize();
   } else if (action === "toggle-like") {
     await handleLike(trigger);
+  } else if (action === "toggle-bookmark") {
+    await handleBookmark(trigger);
+  } else if (action === "toggle-follow-author") {
+    await handleFollowAuthor(trigger);
+  } else if (action === "toggle-comment-like") {
+    await handleCommentLike(trigger);
   } else if (action === "export-work") {
     const work = state.currentWork;
     if (!work || String(work.id) !== trigger.dataset.workId) {

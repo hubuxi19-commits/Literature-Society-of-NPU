@@ -445,6 +445,44 @@ test("写作台支持编辑既有作品并强制填写修改说明", async () =>
   assert.match(app, /当前为第\s*[\s\S]*?版|当前版本/);
 });
 
+test("作品页提供收藏与关注作者按钮，评论行提供点赞", async () => {
+  const app = await readFile(new URL("../js/app.js", import.meta.url), "utf8");
+  assert.match(app, /service\.getWorkSocialCounts\(/);
+  assert.match(app, /service\.getProfileSocialCounts\(/);
+  assert.match(app, /service\.getCommentLikeState\(/);
+  assert.match(app, /action:\s*"toggle-bookmark"/);
+  assert.match(app, /action:\s*"toggle-follow-author"/);
+  assert.match(app, /action:\s*"toggle-comment-like"/);
+  assert.match(app, /handleBookmark\(/);
+  assert.match(app, /handleFollowAuthor\(/);
+  assert.match(app, /handleCommentLike\(/);
+  assert.match(app, /已收藏/);
+  assert.match(app, /已关注/);
+  assert.match(app, /bookmarkLabel/);
+  assert.match(app, /followLabel/);
+  assert.match(app, /commentLikeMap\.get\(/);
+  assert.match(app, /commentLiked \? "已赞" : "赞"/);
+});
+
+test("作者页展示关注与粉丝公开计数并允许关注他人", async () => {
+  const app = await readFile(new URL("../js/app.js", import.meta.url), "utf8");
+  assert.match(app, /"关注",\s*profileSocial\.following_count/);
+  assert.match(app, /"粉丝",\s*profileSocial\.followers_count/);
+  assert.match(app, /toggle-follow-author/);
+});
+
+test("样式提供社交反应区与评论点赞激活态", async () => {
+  const css = await readFile(
+    new URL("../assets/styles.css", import.meta.url),
+    "utf8",
+  );
+  assert.match(css, /\.work-reactions\s*\{[\s\S]*?flex-wrap:\s*wrap/);
+  assert.match(
+    css,
+    /\.comment-like-button\[aria-pressed="true"\]\s*\{[\s\S]*?color:\s*var\(--vermilion\)/,
+  );
+});
+
 test("阅读页支持选区批注、浮动入口与批注列表", async () => {
   const app = await readFile(new URL("../js/app.js", import.meta.url), "utf8");
   assert.match(app, /listWorkQuotes\(/);
