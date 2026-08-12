@@ -129,6 +129,10 @@ revoke all on table public.reports from anon, authenticated;
 revoke all on table public.moderation_actions from anon, authenticated;
 
 -- ---------- upsert_notification 扩展：可选 payload ----------
+-- 先删除发布四的 5 参签名再以 6 参（含默认值）重建，避免同一调用名出现两个重载
+-- （5 参调用在 6 参带默认值时产生歧义，导致 follow/bookmark/like/comment/highlight
+-- 等全部既有 5 参调用在运行时报 "function ... is not unique"）。
+drop function if exists public.upsert_notification(uuid, text, uuid, uuid, uuid);
 create or replace function public.upsert_notification(
   p_recipient uuid,
   p_event_type text,
@@ -192,7 +196,6 @@ begin
 end;
 $$;
 
-revoke all on function public.upsert_notification(uuid, text, uuid, uuid, uuid) from public, anon, authenticated;
 revoke all on function public.upsert_notification(uuid, text, uuid, uuid, uuid, jsonb) from public, anon, authenticated;
 
 -- ---------- list_notifications 补 payload（moderation_outcome 通知需把 decision/action_type 带给前端）----------
