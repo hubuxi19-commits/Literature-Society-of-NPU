@@ -111,6 +111,14 @@ const state = {
   accountSecurityReturnHash: null,
   accountSecurityPendingEmail: null,
   accountSecurityChangeStep: 0,
+  admin: {
+    tab: "reports",
+    reports: [],
+    actions: [],
+    loading: false,
+    requestId: 0,
+    submission: {},
+  },
 };
 
 function element(tagName, options = {}, children = []) {
@@ -3123,6 +3131,290 @@ async function renderMyListPageRoute(kind) {
   await loadMyListPage(kind, { reset: true });
 }
 
+async function loadAdminData() {
+  const requestId = ++state.admin.requestId;
+  state.admin.loading = true;
+  try {
+    const [pending, resolved, dismissed, actions] = await Promise.all([
+      service.listReports("pending"),
+      service.listReports("resolved"),
+      service.listReports("dismissed"),
+      service.listModerationActions(),
+    ]);
+    if (requestId !== state.admin.requestId) return;
+    state.admin.reports = [
+      ...pending.reports.map((r) => ({ ...r, status: "pending" })),
+      ...resolved.reports.map((r) => ({ ...r, status: "resolved" })),
+      ...dismissed.reports.map((r) => ({ ...r, status: "dismissed" })),
+    ];
+    state.admin.actions = actions.actions;
+    state.admin.loading = false;
+    renderAdminConsole();
+  } catch (error) {
+    if (requestId !== state.admin.requestId) return;
+    state.admin.loading = false;
+    showError("处置台暂时无法加载", error.message, true);
+  }
+}
+
+function renderAdmin() {
+  showLoading("正在打开处置台");
+  if (!state.session) {
+    const shell = element("div", { className: "page-shell auth-gate" }, [
+      element("p", { className: "eyebrow", text: "ADMIN" }),
+      element("h2", { text: "登录后查看管理台" }),
+      element("button", {
+        className: "primary-button",
+        type: "button",
+        text: "登录",
+        dataset: { action: "open-auth", returnHash: "#/admin" },
+      }),
+    ]);
+    replaceContent(app, shell);
+    return;
+  }
+  if (state.session.profile.role !== "admin") {
+    replaceContent(
+      app,
+      element("div", { className: "page-shell auth-gate" }, [
+        element("p", { className: "eyebrow", text: "ADMIN" }),
+        element("h2", { text: "只有管理员可以进入处置台" }),
+        element("p", { text: "如果你需要帮助，请联系文学社编辑部。" }),
+      ]),
+    );
+    return;
+  }
+  loadAdminData();
+}
+
+function renderAdminConsole() {
+  const shell = element("div", { className: "page-shell" });
+  const head = element("header", { className: "page-header" }, [
+    element("div", {}, [
+      element("p", { className: "eyebrow", text: "ADMIN" }),
+      element("h1", { text: "管理台" }),
+      element("p", { text: "处置举报、查看审计、管理编辑点评与优质评论。" }),
+    ]),
+  ]);
+  const tabs = element("div", {
+    className: "admin-tabs",
+    attrs: { role: "tablist" },
+  });
+  const pendingCount = state.admin.reports.filter((r) => r.status === "pending").length;
+  const tabDefs = [
+    { id: "reports", label: `待处理举报（${pendingCount}）` },
+    { id: "audit", label: "处置与审计" },
+    { id: "notes", label: "编辑点评与推荐" },
+    { id: "highlights", label: "优质评论" },
+  ];
+  tabDefs.forEach((tab) => {
+    tabs.append(
+      element("button", {
+        className: state.admin.tab === tab.id ? "admin-tab active" : "admin-tab",
+        type: "button",
+        text: tab.label,
+        attrs: {
+          role: "tab",
+          "aria-selected": String(state.admin.tab === tab.id),
+        },
+        dataset: { action: "switch-admin-tab", tab: tab.id },
+      }),
+    );
+  });
+  shell.append(head, tabs);
+  const panel = element("section", { className: "admin-panel" });
+  if (state.admin.tab === "reports") panel.append(renderPendingReports());
+  else if (state.admin.tab === "audit") panel.append(renderAuditList());
+  else if (state.admin.tab === "notes") panel.append(renderNotesDirectory());
+  else panel.append(renderHighlightsList());
+  shell.append(panel);
+  replaceContent(app, shell);
+}
+
+const REPORT_REASON_LABELS = {
+  violation: "违规内容",
+  infringement: "侵权",
+  spam: "垃圾广告",
+  other: "其他",
+};
+const ACTION_LABELS = {
+  hide_work: "隐藏作品",
+  hide_comment: "隐藏评论",
+  warn_user: "警告账号",
+};
+
+function renderPendingReports() {
+  const section = element("section");
+  section.append(
+    element("p", { className: "eyebrow", text: "PENDING" }),
+    element("h2", { text: "待处理举报" }),
+  );
+  const pending = state.admin.reports.filter((r) => r.status === "pending");
+  if (!pending.length) {
+    section.append(
+      element("p", { className: "empty-state", text: "没有待处理的举报。" }),
+    );
+    return section;
+  }
+  const list = element("ol", { className: "report-list" });
+  pending.forEach((report) => {
+    const item = element("li", { className: "report-item", dataset: { reportId: report.id } });
+    item.append(
+      element("div", { className: "report-head" }, [
+        element("span", {
+          className: "report-target",
+          text: report.target_preview || "（无摘要）",
+        }),
+        element("span", {
+          className: "report-meta",
+          text:
+            `${REPORT_REASON_LABELS[report.reason_type] ?? report.reason_type} · 举报人 ${report.reporter_pen_name}`,
+        }),
+      ]),
+      report.detail
+        ? element("p", { className: "report-detail", text: report.detail })
+        : null,
+      element("time", {
+        className: "report-time",
+        text: formatRelativeTime(report.created_at),
+        attrs: { datetime: report.created_at },
+      }),
+    );
+    const form = element("form", {
+      className: "moderate-form",
+      dataset: { moderateForm: report.id },
+    });
+    form.append(
+      element("label", {}, [
+        element("span", { text: "处置结果" }),
+        element("select", { name: "decision" }, [
+          element("option", { value: "resolved", text: "成立（执行动作）" }),
+          element("option", { value: "dismissed", text: "不成立（驳回）" }),
+        ]),
+      ]),
+      element("label", {}, [
+        element("span", { text: "动作" }),
+        element("select", { name: "actionType" }, [
+          element("option", { value: "", text: "选择动作" }),
+          element("option", { value: "hide_work", text: "隐藏作品" }),
+          element("option", { value: "hide_comment", text: "隐藏评论" }),
+          element("option", { value: "warn_user", text: "警告账号" }),
+        ]),
+      ]),
+      element("label", {}, [
+        element("span", { text: "内部说明（不向被举报者展示）" }),
+        element("textarea", { name: "internalNote", attrs: { maxlength: 2000, "aria-label": "内部说明" } }),
+      ]),
+      element("button", {
+        className: "primary-button",
+        type: "submit",
+        text: "提交处置",
+      }),
+    );
+    item.append(form);
+    list.append(item);
+  });
+  section.append(list);
+  return section;
+}
+
+function renderAuditList() {
+  const section = element("section");
+  section.append(
+    element("p", { className: "eyebrow", text: "AUDIT" }),
+    element("h2", { text: "处置与审计记录" }),
+  );
+  if (!state.admin.actions.length) {
+    section.append(
+      element("p", { className: "empty-state", text: "还没有处置记录。" }),
+    );
+    return section;
+  }
+  const list = element("ol", { className: "audit-list" });
+  state.admin.actions.forEach((action) => {
+    const decision = action.decision === "resolved" ? "成立" : "不成立";
+    const actionLabel = action.action_type ? ` · ${ACTION_LABELS[action.action_type] ?? action.action_type}` : "";
+    list.append(
+      element("li", { className: "audit-item" }, [
+        element("div", { className: "audit-head" }, [
+          element("span", { text: `${decision}${actionLabel}` }),
+          element("time", {
+            text: formatRelativeTime(action.created_at),
+            attrs: { datetime: action.created_at },
+          }),
+        ]),
+        element("p", { text: action.target_preview || "（无摘要）" }),
+        element("p", {
+          className: "audit-note",
+          text: `内部说明：${action.internal_note ?? "（无）"}`,
+        }),
+        element("p", { className: "audit-meta", text: `操作人 ${action.admin_pen_name}` }),
+      ]),
+    );
+  });
+  section.append(list);
+  return section;
+}
+
+function renderNotesDirectory() {
+  const section = element("section");
+  section.append(
+    element("p", { className: "eyebrow", text: "EDITORIAL" }),
+    element("h2", { text: "编辑点评与推荐理由" }),
+    element("p", { text: "在作品页就地添加或修改推荐理由与编辑点评。" }),
+  );
+  const noted = state.works.filter((work) =>
+    state.editorialNotes?.some?.((n) => n.work_id === work.id) ?? false,
+  );
+  if (!noted.length) {
+    section.append(
+      element("p", { className: "empty-state", text: "还没有编辑点评或推荐理由。打开任意作品页添加。" }),
+    );
+    return section;
+  }
+  const list = element("ol", { className: "audit-list" });
+  noted.forEach((work) => {
+    list.append(
+      element("li", { className: "audit-item" }, [
+        element("a", { className: "inline-link", href: `#/works/${encodeURIComponent(work.id)}`, text: work.title }),
+      ]),
+    );
+  });
+  section.append(list);
+  return section;
+}
+
+function renderHighlightsList() {
+  const section = element("section");
+  section.append(
+    element("p", { className: "eyebrow", text: "HIGHLIGHTS" }),
+    element("h2", { text: "优质评论" }),
+  );
+  const rows = [];
+  state.works.forEach((work) => {
+    (work.highlights ?? []).forEach((hl) => {
+      rows.push({ work, highlight: hl });
+    });
+  });
+  if (!rows.length) {
+    section.append(
+      element("p", { className: "empty-state", text: "还没有优质评论推荐。" }),
+    );
+    return section;
+  }
+  const list = element("ol", { className: "audit-list" });
+  rows.forEach(({ work, highlight }) => {
+    list.append(
+      element("li", { className: "audit-item" }, [
+        element("a", { className: "inline-link", href: `#/works/${encodeURIComponent(work.id)}`, text: work.title }),
+        element("p", { text: highlight.reason }),
+      ]),
+    );
+  });
+  section.append(list);
+  return section;
+}
+
 function createBookmarkRow(bookmark) {
   const article = element("article", {
     className: "work-row",
@@ -3694,6 +3986,11 @@ document.addEventListener("click", async (event) => {
     moveMobileFeed("next");
   } else if (action === "retry-route") {
     await initialize();
+  } else if (action === "switch-admin-tab") {
+    state.admin.tab = trigger.dataset.tab;
+    renderAdminConsole();
+  } else if (action === "moderate-report-submit") {
+    // 表单由 submit 委托处理，见下方
   } else if (action === "toggle-like") {
     await handleLike(trigger);
   } else if (action === "toggle-bookmark") {
@@ -4041,6 +4338,20 @@ document.addEventListener("submit", async (event) => {
     } catch (error) {
       if (routeToAccountSecurityIfUnverified(error)) return;
       showToast(error.message);
+    }
+  } else if (form.matches("[data-moderate-form]")) {
+    event.preventDefault();
+    const reportId = form.dataset.moderateForm;
+    const formData = new FormData(form);
+    const decision = formData.get("decision");
+    const actionType = formData.get("actionType") || null;
+    const internalNote = formData.get("internalNote") || null;
+    try {
+      await service.moderateReport(reportId, decision, actionType, internalNote);
+      await loadAdminData();
+      showToast("处置已提交");
+    } catch (error) {
+      showToast(`处置失败：${error.message}`);
     }
   } else if (form.id === "recoveryRequestForm") {
     event.preventDefault();
