@@ -1181,7 +1181,7 @@ main {
 .comment-time {
   color: var(--soft-ink);
   font-family: var(--utility);
-  font-size: 0.7rem;
+  font-size: 13px;
 }
 
 .comment-content {
@@ -1549,7 +1549,7 @@ main {
 .discussion-row time {
   color: var(--soft-ink);
   font-family: var(--utility);
-  font-size: 0.72rem;
+  font-size: 13px;
 }
 
 .discussion-row blockquote {
@@ -1609,7 +1609,7 @@ main {
   flex: 0 0 auto;
   color: var(--soft-ink);
   font-family: var(--utility);
-  font-size: 0.72rem;
+  font-size: 13px;
 }
 
 .member-list {
@@ -1652,7 +1652,7 @@ main {
 .member-time {
   color: var(--soft-ink);
   font-family: var(--utility);
-  font-size: 0.72rem;
+  font-size: 13px;
 }
 
 .rules-grid {
@@ -2762,3 +2762,56 @@ main {
 }
 .submission-checklist ul { margin: 0.5rem 0 0.25rem; padding-left: 1.2rem; }
 .submission-checklist-note { opacity: 0.75; font-size: 0.85em; margin-top: 0.5rem; }
+
+/* ---- 无障碍复核（发布五）----
+   恢复表单控件被 outline:none 覆盖的焦点描边，沿用暗红气质。
+   触控媒体查询下补齐 ≥44px 的点击热区，桌面视觉保持不变。 */
+.search-field input:focus-visible,
+.writing-form input:focus-visible,
+.writing-form select:focus-visible,
+.writing-form textarea:focus-visible,
+.profile-form input:focus-visible,
+.profile-form textarea:focus-visible,
+.stack-form input:focus-visible {
+  outline: 2px solid var(--vermilion);
+  outline-offset: 2px;
+}
+
+@media (max-width: 760px) {
+  .write-link,
+  .primary-button,
+  .danger-button,
+  .secondary-button,
+  .text-button,
+  .close-button,
+  .quiet-button,
+  .like-button,
+  .comment-actions button,
+  .comment-like-button,
+  .admin-tab,
+  .report-entry,
+  .moderate-form select,
+  .moderate-form textarea,
+  .stack-form select {
+    min-height: 44px;
+  }
+
+  .secondary-button,
+  .text-button,
+  .close-button,
+  .quiet-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .comment-actions button {
+    padding: 0.35rem 0.5rem;
+    font-size: 13px;
+  }
+
+  .moderate-form select,
+  .stack-form select {
+    padding: 0.55rem 0.5rem;
+  }
+}
