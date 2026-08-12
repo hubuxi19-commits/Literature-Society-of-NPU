@@ -57,6 +57,11 @@ const reportTargetLine = document.querySelector("#reportTargetLine");
 const reportReasonType = document.querySelector("#reportReasonType");
 const reportFormMessage = document.querySelector("[data-report-message]");
 const reportForm = document.querySelector("#reportForm");
+const editorialDialog = document.querySelector("#editorialDialog");
+const editorialContent = document.querySelector("#editorialContent");
+const editorialFieldLabel = document.querySelector("#editorialFieldLabel");
+const editorialFormMessage = document.querySelector("[data-editorial-message]");
+const editorialForm = document.querySelector("#editorialForm");
 
 const DRAFT_KEY = "wenyuan-writing-draft";
 const PROFILE_RETURN_SENTINEL = "__current-profile__";
@@ -1460,6 +1465,15 @@ function createCommentItem(comment, workId, commentLikeMap = new Map(), depth = 
   });
   item.append(head, content);
 
+  const highlight = window.__workHighlights?.get(comment.id);
+  if (highlight) {
+    const badge = element("div", { className: "comment-highlight" }, [
+      element("span", { className: "comment-highlight-mark", text: "编辑推荐" }),
+      element("p", { className: "comment-highlight-reason", text: highlight.reason }),
+    ]);
+    item.append(badge);
+  }
+
   if (!comment.is_deleted) {
     const actions = element("div", { className: "comment-actions" });
     const likeState = commentLikeMap.get(comment.id);
@@ -1475,6 +1489,20 @@ function createCommentItem(comment, workId, commentLikeMap = new Map(), depth = 
         },
       }),
     );
+    if (state.session?.profile?.role === "admin") {
+      const isHighlighted = Boolean(window.__workHighlights?.get(comment.id));
+      actions.append(
+        element("button", {
+          type: "button",
+          text: isHighlighted ? "取消推荐" : "设为优质评论",
+          dataset: {
+            action: isHighlighted ? "unhighlight-comment" : "highlight-comment",
+            commentId: comment.id,
+            workId,
+          },
+        }),
+      );
+    }
     actions.append(
       element("button", {
         className: "comment-like-button",
@@ -1546,6 +1574,8 @@ let annotateButton = null;
 let annotateMode = false;
 let pendingAnnotation = null;
 let pendingReportTarget = null;
+let pendingEditorial = null;
+let workEditorial = null;
 
 // 返回段落相对其所在可批注正文的展示串码点偏移（每个前置段落长度 + 1 个 \n）。
 function paragraphDisplayOffset(paragraph, body) {
@@ -1695,6 +1725,47 @@ async function submitReport(event) {
   }
 }
 
+function openEditorialDialog(initialValue, fieldLabel) {
+  editorialFieldLabel.textContent = fieldLabel;
+  editorialContent.value = initialValue ?? "";
+  editorialFormMessage.textContent = "";
+  if (!editorialDialog.open) editorialDialog.showModal();
+  editorialContent.focus();
+}
+
+async function submitEditorial(event) {
+  event.preventDefault();
+  if (!pendingEditorial) return;
+  const content = editorialContent.value.trim();
+  if (!content) {
+    editorialFormMessage.textContent = "内容不能为空。";
+    return;
+  }
+  const { workId, noteType, commentId, mode } = pendingEditorial;
+  const submit = editorialForm.querySelector('button[type="submit"]');
+  if (submit) submit.disabled = true;
+  try {
+    if (mode === "highlight") {
+      await service.highlightComment(commentId, content);
+      showToast("已设为优质评论。", "success");
+    } else {
+      await service.setWorkEditorialNote(workId, noteType, content);
+      showToast(
+        noteType === "recommendation_reason" ? "推荐理由已更新。" : "编辑点评已更新。",
+        "success",
+      );
+    }
+    editorialDialog.close();
+    pendingEditorial = null;
+    await renderWork(workId);
+  } catch (error) {
+    if (routeToAccountSecurityIfUnverified(error)) return;
+    editorialFormMessage.textContent = error.message;
+  } finally {
+    if (submit) submit.disabled = false;
+  }
+}
+
 function reportTargetLabel(targetType, targetId) {
   if (targetType === "work") {
     const work = state.currentWork?.id === targetId
@@ -1719,10 +1790,16 @@ async function renderWork(workId) {
   cleanupPreparedExport();
   state.currentWork = null;
   try {
-    const [work, quotes] = await Promise.all([
+    const [work, quotes, editorial, highlights] = await Promise.all([
       service.getWork(workId),
       service.listWorkQuotes(workId),
+      service.getWorkEditorial(workId),
+      service.getWorkHighlights(workId),
     ]);
+    const workHighlights = new Map(
+      highlights.highlights.map((h) => [h.comment_id, h]),
+    );
+    workEditorial = editorial;
     state.currentWork = work;
     const [socialCounts, profileSocial, commentLikeState] = await Promise.all([
       service.getWorkSocialCounts(workId),
@@ -1903,6 +1980,55 @@ async function renderWork(workId) {
       }),
     );
 
+    const editorialBlock = element("section", {
+      className: "editorial-block",
+      attrs: { "aria-label": "编辑点评与推荐理由" },
+    });
+    const rec = editorial.recommendation_reason;
+    if (rec?.content) {
+      editorialBlock.append(
+        element("div", { className: "editorial-recommendation" }, [
+          element("p", { className: "eyebrow", text: "EDITORS' PICK" }),
+          element("p", { className: "editorial-text", text: rec.content }),
+          element("p", {
+            className: "editorial-meta",
+            text: `推荐 · ${rec.admin_pen_name ?? "编辑部"} · ${formatDate(rec.updated_at)}`,
+          }),
+        ]),
+      );
+    }
+    const ed = editorial.editorial_note;
+    if (ed?.content) {
+      editorialBlock.append(
+        element("div", { className: "editorial-note" }, [
+          element("p", { className: "eyebrow", text: "EDITOR'S NOTE" }),
+          element("p", { className: "editorial-text", text: ed.content }),
+          element("p", {
+            className: "editorial-meta",
+            text: `点评 · ${ed.admin_pen_name ?? "编辑部"} · ${formatDate(ed.updated_at)}`,
+          }),
+        ]),
+      );
+    }
+    if (state.session?.profile?.role === "admin") {
+      editorialBlock.append(
+        element("div", { className: "editorial-admin-actions" }, [
+          element("button", {
+            className: "quiet-button",
+            type: "button",
+            text: rec?.content ? "修改推荐理由" : "添加推荐理由",
+            dataset: { action: "edit-editorial", noteType: "recommendation_reason", workId: work.id },
+          }),
+          element("button", {
+            className: "quiet-button",
+            type: "button",
+            text: ed?.content ? "修改编辑点评" : "添加编辑点评",
+            dataset: { action: "edit-editorial", noteType: "editorial_note", workId: work.id },
+          }),
+        ]),
+      );
+    }
+
     const quotesBlock = element("section", {
       className: "quotes-block",
       attrs: { "aria-labelledby": "quotes-title" },
@@ -2005,6 +2131,7 @@ async function renderWork(workId) {
         ]),
       );
     }
+    window.__workHighlights = workHighlights;
     const commentTree = element("ol", { className: "comment-thread" });
     const roots = buildCommentTree(work.comments);
     if (roots.length) {
@@ -2020,6 +2147,7 @@ async function renderWork(workId) {
       );
     }
     commentsBlock.append(commentTree);
+    window.__workHighlights = null;
 
     const related = state.works
       .filter(
@@ -2047,6 +2175,7 @@ async function renderWork(workId) {
         return body;
       })(),
       actionBar,
+      ...(editorialBlock.childElementCount ? [editorialBlock] : []),
       element("div", {
         className: "export-results-host",
         attrs: { "aria-live": "polite" },
@@ -3775,6 +3904,7 @@ async function initialize() {
     pendingAnnotation = null;
   });
   reportForm.addEventListener("submit", submitReport);
+  editorialForm.addEventListener("submit", submitEditorial);
   try {
     const saved = readHomeSession();
     if (saved) {
@@ -4291,6 +4421,36 @@ document.addEventListener("click", async (event) => {
     openReportDialog(trigger.dataset.targetType, trigger.dataset.targetId, targetLabel);
   } else if (action === "close-report") {
     if (reportDialog.open) reportDialog.close();
+  } else if (action === "edit-editorial") {
+    const noteType = trigger.dataset.noteType;
+    const current = noteType === "recommendation_reason"
+      ? workEditorial?.recommendation_reason
+      : workEditorial?.editorial_note;
+    pendingEditorial = { workId: trigger.dataset.workId, noteType };
+    openEditorialDialog(
+      current?.content,
+      noteType === "recommendation_reason" ? "推荐理由" : "编辑点评",
+    );
+  } else if (action === "highlight-comment") {
+    pendingEditorial = {
+      commentId: trigger.dataset.commentId,
+      workId: trigger.dataset.workId,
+      mode: "highlight",
+    };
+    openEditorialDialog(null, "推荐理由（将公开展示给读者）");
+  } else if (action === "unhighlight-comment") {
+    const commentId = trigger.dataset.commentId;
+    const workId = trigger.dataset.workId;
+    try {
+      await service.unhighlightComment(commentId);
+      showToast("已取消优质评论推荐。", "success");
+      await renderWork(workId);
+    } catch (error) {
+      if (routeToAccountSecurityIfUnverified(error)) return;
+      showToast(error.message);
+    }
+  } else if (action === "close-editorial") {
+    if (editorialDialog.open) editorialDialog.close();
   } else if (action === "toggle-featured") {
     if (!requireVerifiedWrite(window.location.hash)) return;
     const workId = trigger.dataset.workId;

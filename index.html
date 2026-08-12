@@ -453,6 +453,27 @@
       </form>
     </dialog>
 
+    <dialog class="modal editorial-dialog" id="editorialDialog" aria-labelledby="editorialTitle">
+      <div class="modal-head">
+        <div>
+          <p class="eyebrow">EDITORIAL</p>
+          <h2 id="editorialTitle">编辑内容</h2>
+        </div>
+        <button class="close-button" type="button" data-action="close-editorial" aria-label="关闭">关闭</button>
+      </div>
+      <form id="editorialForm" class="stack-form">
+        <p class="form-message" data-editorial-message role="status"></p>
+        <label>
+          <span id="editorialFieldLabel">内容</span>
+          <textarea name="content" id="editorialContent" maxlength="2000" rows="5" required></textarea>
+        </label>
+        <div class="modal-actions">
+          <button class="secondary-button" type="button" data-action="close-editorial">取消</button>
+          <button class="primary-button" type="submit">保存</button>
+        </div>
+      </form>
+    </dialog>
+
     <div class="toast-region" aria-live="polite" aria-atomic="true">
       <div class="toast" id="toast" hidden></div>
     </div>
