@@ -46,6 +46,7 @@ const accountButton = document.querySelector("#accountButton");
 const accountMenu = document.querySelector("#accountMenu");
 const profileLink = document.querySelector("#profileLink");
 const mobileProfileLink = document.querySelector("#mobileProfileLink");
+const adminMenuLink = document.querySelector("#adminMenuLink");
 const demoRibbon = document.querySelector("#demoRibbon");
 const toast = document.querySelector("#toast");
 const annotateDialog = document.querySelector("#annotateDialog");
@@ -223,12 +224,14 @@ function updateHeader() {
       state.session.profile.id,
     )}`;
     mobileProfileLink.href = profileLink.href;
+    adminMenuLink.hidden = state.session.profile.role !== "admin";
     delete mobileProfileLink.dataset.action;
     delete mobileProfileLink.dataset.returnHash;
   } else {
     accountButton.textContent = "登录";
     accountButton.dataset.action = "open-auth";
     accountMenu.hidden = true;
+    adminMenuLink.hidden = true;
     mobileProfileLink.href = "#/";
     mobileProfileLink.dataset.action = "open-auth";
     mobileProfileLink.dataset.returnHash = PROFILE_RETURN_SENTINEL;
