@@ -2279,6 +2279,102 @@ function createSupabaseService(config) {
       return { comments: data?.comments ?? [] };
     },
 
+    // ---- 治理与管理员编辑（发布五）----
+
+    async reportContent(targetType, targetId, reasonType, detail) {
+      await requireRemoteSession();
+      const client = await getClient();
+      const { data, error } = await client.rpc("report_content", {
+        p_target_type: targetType,
+        p_target_id: targetId,
+        p_reason_type: reasonType,
+        p_detail: detail ?? null,
+      });
+      if (error) throw new Error(error.message);
+      return data;
+    },
+
+    async moderateReport(reportId, decision, actionType, internalNote) {
+      await requireRemoteSession();
+      const client = await getClient();
+      const { data, error } = await client.rpc("moderate_report", {
+        p_report_id: reportId,
+        p_decision: decision,
+        p_action_type: actionType ?? null,
+        p_internal_note: internalNote ?? null,
+      });
+      if (error) throw new Error(error.message);
+      return data;
+    },
+
+    async setWorkEditorialNote(workId, noteType, content) {
+      await requireRemoteSession();
+      const client = await getClient();
+      const { data, error } = await client.rpc("set_work_editorial_note", {
+        p_work_id: workId,
+        p_note_type: noteType,
+        p_content: content,
+      });
+      if (error) throw new Error(error.message);
+      return data;
+    },
+
+    async highlightComment(commentId, reason) {
+      await requireRemoteSession();
+      const client = await getClient();
+      const { data, error } = await client.rpc("highlight_comment", {
+        p_comment_id: commentId,
+        p_reason: reason,
+      });
+      if (error) throw new Error(error.message);
+      return data;
+    },
+
+    async unhighlightComment(commentId) {
+      await requireRemoteSession();
+      const client = await getClient();
+      const { error } = await client.rpc("unhighlight_comment", {
+        p_comment_id: commentId,
+      });
+      if (error) throw new Error(error.message);
+    },
+
+    async listReports(status = "pending") {
+      await requireRemoteSession();
+      const client = await getClient();
+      const { data, error } = await client.rpc("list_reports", {
+        p_status: status,
+      });
+      if (error) throw new Error(error.message);
+      return { reports: data?.reports ?? [] };
+    },
+
+    async listModerationActions() {
+      await requireRemoteSession();
+      const client = await getClient();
+      const { data, error } = await client.rpc("list_moderation_actions", {});
+      if (error) throw new Error(error.message);
+      return { actions: data?.actions ?? [] };
+    },
+
+    async getWorkEditorial(workId) {
+      const client = await getClient();
+      const { data, error } = await client.rpc("get_work_editorial", {
+        p_work_id: workId,
+      });
+      if (error) throw new Error(error.message);
+      return data ?? {};
+    },
+
+    async getWorkHighlights(workId) {
+      const client = await getClient();
+      const { data, error } = await client.rpc("get_work_highlights", {
+        p_work_id: workId,
+      });
+      if (error) throw new Error(error.message);
+      return { highlights: data?.highlights ?? [] };
+    },
+
     async getAccountSecurityStatus() {
       const current = await requireRemoteSession();
       return invokeFunction("account-email", { action: "status" });
