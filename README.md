@@ -349,6 +349,13 @@ git push origin main
 
 以下条目记录已实际发布到生产的真实改动（区别于上面的示例步骤）。
 
+### 2026-08-12 · 发布5：治理与管理员编辑能力
+
+- **前端**：功能分支 `codex/wenyuan-community-upgrade` 快进合并 `main`（`69cfa0c` → `1707447`）并推送（本机 `github.com:443` 直连不通，经 SSH 通道推送）；GitHub Pages（source `main`）构建完成，生产站已更新。
+- **数据库**：生产 Supabase 项目（ref `odfjxtzgekhiaktzaxas`）执行了 [`supabase/migrations/20260811_governance_and_admin.sql`](./supabase/migrations/20260811_governance_and_admin.sql)（经 Management API，整体包在单个事务中）：新建 `work_editorial_notes`、`comment_highlights`、`reports`、`moderation_actions` 四表、索引与 RLS 并 revoke 直接授权；`notifications` 增加 `payload` 列并扩展事件类型约束（新增 `comment_highlight`、`moderation_outcome`）；`upsert_notification` 从 5 参改为 6 参（带默认 `p_payload`），`list_notifications` 输出 `payload`；创建举报/处置/编辑点评/优质评论推荐/审计列表等受保护 RPC。
+- **发布内容**：举报入口（作品、评论、账号公开资料）；管理员处置台 + 处置审计记录；编辑点评与优质评论推荐（标注管理员身份与时间）；投稿引导清单（只引导不阻止）；账户菜单管理台入口；整站视觉与无障碍复核（移动正文、元信息字号、触控目标、焦点状态）。
+- **生产验证**：迁移后 4 新表 RLS 全部启用、9 个新 RPC 齐全、`upsert_notification` 为唯一 6 参签名、事件类型约束含新事件；线上只读冒烟通过——首页正常渲染 10 篇作品、阅读页正常加载、`#/admin` 路由无 JS 错误、全部 Supabase 请求 200。
+
 ### 2026-08-11 · 发布4：私密社交与站内通知
 
 - **前端**：功能分支 `codex/wenyuan-community-upgrade` 快进合并 `main`（`43d3d6e` → `90743df`）并推送；GitHub Pages（source `main`）构建完成，生产站已更新。
