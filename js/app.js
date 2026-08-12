@@ -3149,7 +3149,9 @@ async function loadAdminData() {
     ];
     state.admin.actions = actions.actions;
     state.admin.loading = false;
-    renderAdminConsole();
+    if (parseRoute(window.location.hash).name === "admin") {
+      renderAdminConsole();
+    }
   } catch (error) {
     if (requestId !== state.admin.requestId) return;
     state.admin.loading = false;
@@ -3989,8 +3991,6 @@ document.addEventListener("click", async (event) => {
   } else if (action === "switch-admin-tab") {
     state.admin.tab = trigger.dataset.tab;
     renderAdminConsole();
-  } else if (action === "moderate-report-submit") {
-    // 表单由 submit 委托处理，见下方
   } else if (action === "toggle-like") {
     await handleLike(trigger);
   } else if (action === "toggle-bookmark") {
