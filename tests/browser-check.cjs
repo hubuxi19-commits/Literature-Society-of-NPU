@@ -1411,6 +1411,73 @@ async function socialFlow(browser, browserMessages) {
   await context.close();
 }
 
+async function governanceFlow(browser, browserMessages) {
+  const context = await browser.newContext({
+    viewport: { width: 1440, height: 1000 },
+  });
+  const page = await context.newPage();
+  await useDemoConfig(page);
+  page.setDefaultTimeout(8000);
+  page.on("console", (message) => {
+    if (message.type() === "error") browserMessages.push(`governance console: ${message.text()}`);
+  });
+  page.on("pageerror", (error) => {
+    browserMessages.push(`governance pageerror: ${error.message}`);
+  });
+
+  await page.goto(baseUrl);
+  await page.waitForLoadState("networkidle");
+
+  // 非管理员（松声）访问 #/admin → 无权限
+  await login(page, "2023123456", "wenyuan88");
+  await goToHash(page, "#/admin", "只有管理员可以进入处置台");
+
+  // 白露举报松声的作品《末班车经过友谊校区》
+  await page.locator("#accountButton").click();
+  await page.getByRole("button", { name: "退出登录" }).click();
+  await login(page, "2022111111", "reader88");
+  await goToHash(page, "#/works/work-night-bus", "末班车经过友谊校区");
+  await expectVisible(page.getByRole("button", { name: "举报这篇作品" }), "作品举报按钮");
+  await page.getByRole("button", { name: "举报这篇作品" }).click();
+  await expectVisible(page.locator("#reportDialog"), "举报对话框");
+  await page.locator('#reportForm textarea[name="detail"]').fill("疑似违规");
+  await page.getByRole("button", { name: "提交举报" }).click();
+  await expectVisible(page.getByText("举报已提交"), "举报成功提示");
+
+  // 编辑部（admin）登录 → 处置台待处理有 1 条 → 处置成立隐藏作品
+  await page.locator("#accountButton").click();
+  await page.getByRole("button", { name: "退出登录" }).click();
+  await login(page, "2023000001", "editor88");
+  await goToHash(page, "#/admin", "管理台");
+  await expectVisible(page.locator(".report-item"), "待处理举报列表");
+  if ((await page.locator(".report-item").count()) < 1) {
+    throw new Error("待处理举报应为至少 1 条");
+  }
+  // 处置：成立 + 隐藏作品 + 内部说明
+  await page.locator(".moderate-form select[name='decision']").selectOption("resolved");
+  await page.locator(".moderate-form select[name='actionType']").selectOption("hide_work");
+  await page.locator('.moderate-form textarea[name="internalNote"]').fill("确认违规");
+  await page.getByRole("button", { name: "提交处置" }).click();
+  await expectVisible(page.getByText("处置已提交"), "处置成功提示");
+  await page.getByRole("tab", { name: /处置与审计/ }).click();
+  await expectVisible(page.locator(".audit-item"), "审计记录列表");
+  if (!(await page.locator(".audit-item").innerText()).includes("内部说明：确认违规")) {
+    throw new Error("审计记录缺少内部说明");
+  }
+
+  // 作者松声收到处置结果通知
+  await page.locator("#accountButton").click();
+  await page.getByRole("button", { name: "退出登录" }).click();
+  await login(page, "2023123456", "wenyuan88");
+  await goToHash(page, "#/notifications", "消息");
+  const texts = await page.locator(".notification-text").allTextContents();
+  if (!texts.some((t) => t.includes("处理了与你相关的举报"))) {
+    throw new Error(`松声未收到处置结果通知：${texts.join(" | ")}`);
+  }
+
+  await context.close();
+}
+
 (async () => {
   const browserMessages = [];
   const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE;
@@ -1424,6 +1491,7 @@ async function socialFlow(browser, browserMessages) {
     await mobileProfileAuthFlow(browser, browserMessages);
     await accountSecurityFlow(browser, browserMessages);
     await socialFlow(browser, browserMessages);
+    await governanceFlow(browser, browserMessages);
     if (browserMessages.length) {
       throw new Error(`浏览器控制台出现错误：\n${browserMessages.join("\n")}`);
     }
