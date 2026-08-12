@@ -2000,7 +2000,7 @@ async function renderWork(workId) {
     const ed = editorial.editorial_note;
     if (ed?.content) {
       editorialBlock.append(
-        element("div", { className: "editorial-note" }, [
+        element("div", { className: "editorial-note-block" }, [
           element("p", { className: "eyebrow", text: "EDITOR'S NOTE" }),
           element("p", { className: "editorial-text", text: ed.content }),
           element("p", {

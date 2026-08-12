@@ -2745,7 +2745,7 @@ main {
 .audit-meta { opacity: 0.7; font-size: 0.85em; }
 .report-entry { font-size: 0.85em; opacity: 0.75; }
 .editorial-block { border-left: 2px solid var(--cinnabar, #9a3b3b); padding-left: 1rem; margin: 1.5rem 0; }
-.editorial-recommendation, .editorial-note { margin-bottom: 1rem; }
+.editorial-recommendation, .editorial-note-block { margin-bottom: 1rem; }
 .editorial-text { font-size: 1.02em; }
 .editorial-meta { opacity: 0.75; font-size: 0.85em; margin-top: 0.25rem; }
 .editorial-admin-actions { display: flex; gap: 0.75rem; margin-top: 0.5rem; }
