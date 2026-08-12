@@ -165,6 +165,10 @@ revoke all on table public.reports from anon, authenticated;
 revoke all on table public.moderation_actions from anon, authenticated;
 
 -- ---------- upsert_notification 扩展：可选 payload ----------
+-- 先删除 5 参版本再建 6 参带默认值，避免调用歧义（PostgreSQL "function is not unique"，
+-- 会破坏发布4 自身 follow_user/bookmark_work/toggle_like_work/like_comment/create_comment 等 5 参调用）。
+-- 5 参调用经默认参数解析到 6 参版本（payload 为 null），行为不变。
+drop function if exists public.upsert_notification(uuid, text, uuid, uuid, uuid);
 create or replace function public.upsert_notification(
   p_recipient uuid,
   p_event_type text,
@@ -228,7 +232,6 @@ begin
 end;
 $$;
 
-revoke all on function public.upsert_notification(uuid, text, uuid, uuid, uuid) from public, anon, authenticated;
 revoke all on function public.upsert_notification(uuid, text, uuid, uuid, uuid, jsonb) from public, anon, authenticated;
 
 -- ---------- list_notifications 补 payload（moderation_outcome 通知需把 decision/action_type 带给前端）----------
