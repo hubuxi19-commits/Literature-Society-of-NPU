@@ -444,6 +444,14 @@ test("schema 的社交通知块与迁移同时存在", async () => {
   assert.match(schema, /create table if not exists public\.notifications/i);
 });
 
+test("schema 的治理块与迁移同时存在", async () => {
+  const schema = await readFile(schemaUrl, "utf8");
+  assert.match(schema, /-- GOVERNANCE_ADMIN_START/);
+  assert.match(schema, /-- GOVERNANCE_ADMIN_END/);
+  assert.match(schema, /create table if not exists public\.reports/i);
+  assert.match(schema, /create table if not exists public\.moderation_actions/i);
+});
+
 test("前端实现历史版本页、恢复入口与阅读页版本入口", async () => {
   const app = await readFile(new URL("../js/app.js", import.meta.url), "utf8");
   assert.match(app, /renderWorkVersions/);
