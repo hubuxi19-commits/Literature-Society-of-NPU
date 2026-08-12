@@ -1022,48 +1022,60 @@ function renderExportActions(prepared, container) {
   container.replaceChildren(panel);
 }
 
-function createMobileCategoryStrip() {
-  const strip = element("nav", {
-    className: "mobile-category-strip",
-    attrs: { "aria-label": "作品分类" },
+function createMobileFilterBar() {
+  const form = element("form", {
+    className: "mobile-filter-bar",
+    id: "homeFilters",
+    attrs: { "aria-label": "筛选和搜索作品" },
+  });
+  const categoryMenu = element("details", {
+    className: "mobile-category-menu",
+  });
+  const categoryOptions = element("div", {
+    className: "mobile-category-options",
+    attrs: { role: "menu", "aria-label": "作品分类" },
   });
   CATEGORIES.forEach((category) => {
-    strip.append(
+    categoryOptions.append(
       element("button", {
         type: "button",
         text: category,
         dataset: { action: "mobile-category", category },
         attrs: {
-          "aria-pressed": String(state.filters.category === category),
+          role: "menuitemradio",
+          "aria-checked": String(state.filters.category === category),
         },
       }),
     );
   });
-  return strip;
-}
-
-function createMobileSearchBand() {
-  const band = element("section", {
-    className: "filter-band mobile-search-band",
-    attrs: { "aria-label": "搜索作品" },
-  });
-  const form = element("form", {
-    className: "filter-form",
-    id: "homeFilters",
-  });
-  const search = element("div", { className: "search-field" });
-  search.append(
+  categoryMenu.append(
+    element("summary", {
+      text: state.filters.category,
+      attrs: {
+        "aria-label": `选择作品分类，当前${state.filters.category}`,
+      },
+    }),
+    categoryOptions,
+  );
+  form.append(
+    categoryMenu,
     element("input", {
       name: "query",
       value: state.filters.query,
-      placeholder: "搜索标题、摘要或作者",
-      attrs: { "aria-label": "搜索作品" },
+      placeholder: "搜索作品",
+      attrs: {
+        type: "search",
+        "aria-label": "搜索作品",
+        enterkeyhint: "search",
+      },
     }),
-    element("button", { type: "submit", text: "搜索" }),
+    element("button", {
+      className: "mobile-search-submit",
+      type: "submit",
+      text: "搜索",
+    }),
   );
-  form.append(search);
-  band.append(form);
-  return band;
+  return form;
 }
 
 function buildMobileFeedSignature() {
@@ -1301,13 +1313,6 @@ function renderMobileHome() {
     element("h1", { id: "home-title", text: "让作品被读见" }),
     element("p", { text: "左右轻扫换一篇，向上滑动仍可浏览页面。" }),
   ]);
-  const filterPanel = element("details", {
-    className: "mobile-feed-filters",
-  });
-  filterPanel.append(
-    element("summary", { text: "搜索作品" }),
-    createMobileSearchBand(),
-  );
   const stage = element("section", {
     className: "mobile-feed-stage",
     attrs: {
@@ -1390,7 +1395,7 @@ function renderMobileHome() {
     );
   }
 
-  shell.append(masthead, createMobileCategoryStrip(), filterPanel, stage);
+  shell.append(masthead, createMobileFilterBar(), stage);
   replaceContent(app, shell);
 }
 
@@ -4210,6 +4215,14 @@ async function handleCommentLike(button) {
 }
 
 document.addEventListener("click", async (event) => {
+  const openCategoryMenu = document.querySelector(".mobile-category-menu[open]");
+  if (
+    openCategoryMenu &&
+    event.target instanceof Node &&
+    !openCategoryMenu.contains(event.target)
+  ) {
+    openCategoryMenu.removeAttribute("open");
+  }
   const trigger = event.target.closest("[data-action]");
   if (!trigger) return;
   const action = trigger.dataset.action;
@@ -4281,6 +4294,7 @@ document.addEventListener("click", async (event) => {
   } else if (action === "retry-browse-more") {
     loadMoreWorks();
   } else if (action === "mobile-category") {
+    trigger.closest(".mobile-category-menu")?.removeAttribute("open");
     setFilters({ category: trigger.dataset.category });
   } else if (action === "mobile-feed-previous") {
     moveMobileFeed("previous");
@@ -4841,6 +4855,7 @@ document.addEventListener("input", (event) => {
 document.addEventListener("input", (event) => {
   const target = event.target;
   if (target instanceof HTMLInputElement && target.name === "query") {
+    if (target.form?.classList.contains("mobile-filter-bar")) return;
     clearTimeout(window.__homeSearchTimer);
     window.__homeSearchTimer = setTimeout(() => {
       setFilters({ query: target.value.trim() });

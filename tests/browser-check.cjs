@@ -755,10 +755,19 @@ async function mobileFlow(browser, browserMessages) {
     ["#/", "#/discussions", "#/write", "#/notifications", "#/"],
   );
 
-  const categoryStrip = page.getByRole("navigation", { name: "作品分类" });
-  await expectVisible(categoryStrip, "移动端横向分类栏");
-  const categoryButtons = categoryStrip.locator("button");
-  assert.deepEqual(await categoryButtons.allTextContents(), [
+  const filterBar = page.locator(".mobile-filter-bar");
+  await expectVisible(filterBar, "移动端分类搜索栏");
+  const categoryMenu = filterBar.locator(".mobile-category-menu");
+  const categorySummary = categoryMenu.locator("summary");
+  const searchInput = filterBar.getByRole("searchbox", { name: "搜索作品" });
+  const searchButton = filterBar.getByRole("button", { name: "搜索", exact: true });
+  await expectVisible(categorySummary, "移动端分类按钮");
+  await expectVisible(searchInput, "移动端搜索输入框");
+  await expectVisible(searchButton, "移动端搜索键");
+  assert.equal((await categorySummary.textContent()).trim(), "全部");
+  await categorySummary.click();
+  const categoryButtons = categoryMenu.locator(".mobile-category-options button");
+  assert.deepEqual((await categoryButtons.allTextContents()).map((text) => text.trim()), [
     "全部",
     "新诗",
     "旧诗",
@@ -767,16 +776,42 @@ async function mobileFlow(browser, browserMessages) {
     "随笔",
     "其他",
   ]);
-  const categoryScroll = await categoryStrip.evaluate((strip) => ({
-    scrollWidth: strip.scrollWidth,
-    clientWidth: strip.clientWidth,
+  const filterBarLayout = await filterBar.evaluate((bar) => ({
+    scrollWidth: bar.scrollWidth,
+    clientWidth: bar.clientWidth,
+    childTops: [...bar.children].map((child) => Math.round(child.getBoundingClientRect().top)),
   }));
-  if (categoryScroll.scrollWidth <= categoryScroll.clientWidth) {
-    throw new Error("390×844 移动分类栏不能横向滚动");
+  if (filterBarLayout.scrollWidth > filterBarLayout.clientWidth) {
+    throw new Error("390×844 移动分类搜索栏出现横向溢出");
+  }
+  if (new Set(filterBarLayout.childTops).size !== 1) {
+    throw new Error("移动分类按钮、搜索框和搜索键没有保持在同一行");
+  }
+  await page.locator(".mobile-feed-masthead").click();
+  if (await categoryMenu.getAttribute("open")) {
+    throw new Error("点击分类栏外部后分类菜单没有关闭");
   }
   if (await page.locator('.mobile-home select[name="sort"]').count()) {
     throw new Error("移动首页仍显示会误导用户的排序控件");
   }
+  if (await page.locator(".mobile-category-strip, .mobile-feed-filters").count()) {
+    throw new Error("移动首页仍显示旧分类条或折叠搜索区");
+  }
+
+  const beforeTypingCardId = await mobileCard.getAttribute("data-work-id");
+  await searchInput.fill("不会命中的移动端测试词");
+  await page.waitForTimeout(450);
+  assert.equal(
+    await mobileCard.getAttribute("data-work-id"),
+    beforeTypingCardId,
+    "移动端输入关键词时不应自动请求或替换作品",
+  );
+  await searchButton.click();
+  await expectVisible(page.getByRole("heading", { name: "没有找到对应作品" }), "搜索空态");
+  const restoredSearchInput = page.getByRole("searchbox", { name: "搜索作品" });
+  await restoredSearchInput.fill("");
+  await restoredSearchInput.press("Enter");
+  await expectVisible(page.locator("[data-mobile-work-card]"), "回车清空搜索后的作品卡片");
 
   const firstWorkId = await mobileCard.getAttribute("data-work-id");
   await page.evaluate(() => {
@@ -880,20 +915,34 @@ async function mobileFlow(browser, browserMessages) {
     "无合成点击滑动后的返回首页",
   );
 
-  await categoryButtons.filter({ hasText: /^散文$/ }).click();
+  await page.locator(".mobile-category-menu summary").click();
+  await page
+    .locator(".mobile-category-options button")
+    .filter({ hasText: /^散文$/ })
+    .click();
   await page.waitForFunction(
     () =>
       document.querySelector(".mobile-work-category span")?.textContent === "散文",
+  );
+  if (await page.locator(".mobile-category-menu").getAttribute("open")) {
+    throw new Error("选择分类后分类菜单没有关闭");
+  }
+  assert.equal(
+    (await page.locator(".mobile-category-menu summary").textContent()).trim(),
+    "散文",
   );
   const resetPrevious = page.getByRole("button", { name: "← 上一篇" });
   if (!(await resetPrevious.isDisabled())) {
     throw new Error("切换移动分类后没有把作品队列重置到起点");
   }
-  await page.getByRole("button", { name: "全部", exact: true }).click();
+  await page.locator(".mobile-category-menu summary").click();
+  await page
+    .locator(".mobile-category-options button")
+    .filter({ hasText: /^全部$/ })
+    .click();
   await page.waitForFunction(
     () =>
-      document.querySelector('.mobile-category-strip button[aria-pressed="true"]')
-        ?.textContent === "全部",
+      document.querySelector(".mobile-category-menu summary")?.textContent === "全部",
   );
 
   let endNextButton = page.getByRole("button", { name: "下一篇 →" });

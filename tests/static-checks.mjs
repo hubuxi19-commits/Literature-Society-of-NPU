@@ -99,6 +99,16 @@ test("样式包含视觉令牌、键盘焦点、减少动效和移动端断点",
 
 test("移动首页使用独立队列、可访问卡片与被动触摸手势", async () => {
   const app = await readFile(new URL("../js/app.js", import.meta.url), "utf8");
+  assert.match(app, /function\s+createMobileFilterBar\s*\(/);
+  assert.match(app, /className:\s*"mobile-filter-bar"/);
+  assert.match(app, /className:\s*"mobile-category-menu"/);
+  assert.match(app, /placeholder:\s*"搜索作品"/);
+  assert.match(app, /aria-checked/);
+  assert.match(
+    app,
+    /target\.form\?\.classList\.contains\("mobile-filter-bar"\)[\s\S]*?return/,
+  );
+  assert.doesNotMatch(app, /function\s+createMobileCategoryStrip\s*\(/);
   assert.match(app, /from\s+"\.\/mobile-feed\.mjs"/);
   assert.match(app, /mobileFeed:\s*\{[\s\S]*?controller:\s*null/);
   assert.match(app, /function\s+renderMobileHome\s*\(/);
@@ -177,7 +187,12 @@ test("移动首页样式提供单卡纸页舞台并保留纵向滚动", async ()
     /\.mobile-feed-control:disabled\s*\{[\s\S]*?cursor:\s*not-allowed/,
   );
   assert.match(css, /\.mobile-feed-control:not\(:disabled\):hover/);
-  assert.match(css, /\.mobile-category-strip[\s\S]*?overflow-x:\s*auto/);
+  assert.match(
+    css,
+    /\.mobile-filter-bar\s*\{[\s\S]*?grid-template-columns:\s*auto\s+minmax\(0,\s*1fr\)\s+auto/,
+  );
+  assert.match(css, /\.mobile-filter-bar[\s\S]*?min-height:\s*44px/);
+  assert.match(css, /\.mobile-category-options[\s\S]*?position:\s*absolute/);
   assert.match(css, /\.mobile-bottom-nav[\s\S]*?env\(safe-area-inset-bottom\)/);
 });
 
