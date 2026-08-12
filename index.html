@@ -400,6 +400,59 @@
       </form>
     </dialog>
 
+    <dialog
+      class="modal report-dialog"
+      id="reportDialog"
+      aria-labelledby="reportTitle"
+    >
+      <div class="modal-head">
+        <div>
+          <p class="eyebrow">REPORT</p>
+          <h2 id="reportTitle">举报</h2>
+        </div>
+        <button
+          class="close-button"
+          type="button"
+          data-action="close-report"
+          aria-label="关闭举报窗口"
+        >
+          关闭
+        </button>
+      </div>
+
+      <form id="reportForm" class="stack-form">
+        <p class="form-message" data-report-message role="status"></p>
+        <label>
+          <span>举报目标</span>
+          <p class="report-target-line" id="reportTargetLine"></p>
+        </label>
+        <label>
+          <span>举报类型</span>
+          <select name="reasonType" id="reportReasonType" required>
+            <option value="violation">违规内容</option>
+            <option value="infringement">侵权</option>
+            <option value="spam">垃圾广告</option>
+            <option value="other">其他</option>
+          </select>
+        </label>
+        <label>
+          <span>详细说明</span>
+          <textarea
+            name="detail"
+            placeholder="告诉我们具体原因（选填，最多 2000 字）"
+            maxlength="2000"
+            rows="5"
+          ></textarea>
+        </label>
+        <div class="modal-actions">
+          <button class="secondary-button" type="button" data-action="close-report">
+            取消
+          </button>
+          <button class="primary-button" type="submit">提交举报</button>
+        </div>
+      </form>
+    </dialog>
+
     <div class="toast-region" aria-live="polite" aria-atomic="true">
       <div class="toast" id="toast" hidden></div>
     </div>

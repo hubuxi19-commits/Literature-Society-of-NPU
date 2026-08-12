@@ -52,6 +52,11 @@ const annotateDialog = document.querySelector("#annotateDialog");
 const annotateQuoteText = document.querySelector("#annotateQuoteText");
 const annotateContent = document.querySelector("#annotateContent");
 const annotateFormMessage = document.querySelector("[data-annotate-message]");
+const reportDialog = document.querySelector("#reportDialog");
+const reportTargetLine = document.querySelector("#reportTargetLine");
+const reportReasonType = document.querySelector("#reportReasonType");
+const reportFormMessage = document.querySelector("[data-report-message]");
+const reportForm = document.querySelector("#reportForm");
 
 const DRAFT_KEY = "wenyuan-writing-draft";
 const PROFILE_RETURN_SENTINEL = "__current-profile__";
@@ -1461,6 +1466,17 @@ function createCommentItem(comment, workId, commentLikeMap = new Map(), depth = 
     const commentLiked = Boolean(likeState?.liked_by_current_user);
     actions.append(
       element("button", {
+        type: "button",
+        text: "举报",
+        dataset: {
+          action: "report",
+          targetType: "comment",
+          targetId: comment.id,
+        },
+      }),
+    );
+    actions.append(
+      element("button", {
         className: "comment-like-button",
         type: "button",
         text: `${commentLiked ? "已赞" : "赞"} ${likeState?.like_count ?? 0}`,
@@ -1529,6 +1545,7 @@ function createCommentItem(comment, workId, commentLikeMap = new Map(), depth = 
 let annotateButton = null;
 let annotateMode = false;
 let pendingAnnotation = null;
+let pendingReportTarget = null;
 
 // 返回段落相对其所在可批注正文的展示串码点偏移（每个前置段落长度 + 1 个 \n）。
 function paragraphDisplayOffset(paragraph, body) {
@@ -1643,6 +1660,53 @@ function openAnnotation(selection, body) {
   annotateFormMessage.textContent = "";
   if (!annotateDialog.open) annotateDialog.showModal();
   annotateContent.focus();
+}
+
+function openReportDialog(targetType, targetId, targetLabel) {
+  pendingReportTarget = { targetType, targetId };
+  reportTargetLine.textContent = targetLabel;
+  reportReasonType.selectedIndex = 0;
+  reportFormMessage.textContent = "";
+  reportDialog.querySelector("textarea[name='detail']").value = "";
+  if (!reportDialog.open) reportDialog.showModal();
+}
+
+async function submitReport(event) {
+  event.preventDefault();
+  if (!pendingReportTarget) return;
+  const reasonType = reportReasonType.value;
+  const detail = reportDialog.querySelector("textarea[name='detail']").value;
+  try {
+    const result = await service.reportContent(
+      pendingReportTarget.targetType,
+      pendingReportTarget.targetId,
+      reasonType,
+      detail,
+    );
+    if (result.status === "already_reported") {
+      showToast("你已经举报过这个内容了。");
+    } else {
+      showToast("举报已提交，感谢你的反馈。");
+    }
+    reportDialog.close();
+  } catch (error) {
+    reportFormMessage.textContent = error.message;
+    if (routeToAccountSecurityIfUnverified(error)) return;
+  }
+}
+
+function reportTargetLabel(targetType, targetId) {
+  if (targetType === "work") {
+    const work = state.currentWork?.id === targetId
+      ? state.currentWork
+      : state.works.find((w) => w.id === targetId);
+    return `作品：${work?.title ?? "未知"}`;
+  }
+  if (targetType === "comment") {
+    return "评论";
+  }
+  const profile = state.profiles?.find?.((p) => p.id === targetId);
+  return `用户：${profile?.pen_name ?? "未知"}`;
 }
 
 function handleSelection(event) {
@@ -1829,6 +1893,15 @@ async function renderWork(workId) {
       );
       actionBar.append(adminActions);
     }
+    actionBar.append(
+      element("button", {
+        className: "quiet-button report-entry",
+        type: "button",
+        text: "举报作品",
+        dataset: { action: "report", targetType: "work", targetId: work.id },
+        attrs: { "aria-label": "举报这篇作品" },
+      }),
+    );
 
     const quotesBlock = element("section", {
       className: "quotes-block",
@@ -2615,8 +2688,17 @@ async function renderAuthor(profileId) {
           dataset: { followCount: profile.id },
         }),
       );
+      const reportProfileButton = element("button", {
+        className: "quiet-button report-entry",
+        type: "button",
+        text: "举报此用户",
+        dataset: { action: "report", targetType: "profile", targetId: profile.id },
+      });
       identity.append(
-        element("div", { className: "profile-actions" }, [followButton]),
+        element("div", { className: "profile-actions" }, [
+          followButton,
+          reportProfileButton,
+        ]),
       );
     }
     const stats = element("dl", { className: "profile-stats" });
@@ -3692,6 +3774,7 @@ async function initialize() {
   annotateDialog.addEventListener("close", () => {
     pendingAnnotation = null;
   });
+  reportForm.addEventListener("submit", submitReport);
   try {
     const saved = readHomeSession();
     if (saved) {
@@ -4199,6 +4282,15 @@ document.addEventListener("click", async (event) => {
     );
   } else if (action === "close-annotate") {
     annotateDialog.close();
+  } else if (action === "report") {
+    if (!state.session) {
+      openAuth("login", window.location.hash);
+      return;
+    }
+    const targetLabel = reportTargetLabel(trigger.dataset.targetType, trigger.dataset.targetId);
+    openReportDialog(trigger.dataset.targetType, trigger.dataset.targetId, targetLabel);
+  } else if (action === "close-report") {
+    if (reportDialog.open) reportDialog.close();
   } else if (action === "toggle-featured") {
     if (!requireVerifiedWrite(window.location.hash)) return;
     const workId = trigger.dataset.workId;
