@@ -779,6 +779,9 @@ async function mobileFlow(browser, browserMessages) {
   }
 
   const firstWorkId = await mobileCard.getAttribute("data-work-id");
+  await page.evaluate(() => {
+    window.__mobileHomeBeforeFeedMove = document.querySelector(".mobile-home");
+  });
   const authorKeyResult = await mobileCard
     .locator(".mobile-work-byline a")
     .evaluate((authorLink) => {
@@ -818,6 +821,12 @@ async function mobileFlow(browser, browserMessages) {
   const nextWorkId = await mobileCard.getAttribute("data-work-id");
   if (!nextWorkId || nextWorkId === firstWorkId) {
     throw new Error("向左滑动没有进入下一篇作品");
+  }
+  const preservedMobileHome = await page.evaluate(
+    () => window.__mobileHomeBeforeFeedMove === document.querySelector(".mobile-home"),
+  );
+  if (!preservedMobileHome) {
+    throw new Error("切换作品时重建了整个移动首页");
   }
   await mobileCard.locator(".mobile-work-copy").click();
   if (new URL(page.url()).hash !== startHash) {

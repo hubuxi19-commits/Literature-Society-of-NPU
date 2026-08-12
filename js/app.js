@@ -1,5 +1,6 @@
 import { config } from "./config.mjs";
 import { createDataService } from "./data-service.mjs";
+import { createRouteCache } from "./route-cache.mjs";
 import {
   canShareExportFiles,
   downloadExportFile,
@@ -71,6 +72,42 @@ const HOME_SESSION_KEY = "wenyuan-home-session";
 const HOME_SCROLL_KEY = "wenyuan-home-scroll";
 const mobileHomeMedia = window.matchMedia("(max-width: 760px)");
 let previousRouteName = null;
+const routeCache = createRouteCache({ maxEntries: 32, ttlMs: 5 * 60 * 1000 });
+const routeRequests = new Map();
+
+function cachedRouteRequest(key, request) {
+  const cached = routeCache.get(key);
+  if (cached !== undefined) return Promise.resolve(cached);
+  if (routeRequests.has(key)) return routeRequests.get(key);
+  const pending = Promise.resolve()
+    .then(request)
+    .then((value) => routeCache.set(key, value))
+    .finally(() => routeRequests.delete(key));
+  routeRequests.set(key, pending);
+  return pending;
+}
+
+function getCachedWork(workId) {
+  return cachedRouteRequest(`work:${workId}`, () => service.getWork(workId));
+}
+
+function getCachedProfile(profileId) {
+  return cachedRouteRequest(`profile:${profileId}`, () => service.getProfile(profileId));
+}
+
+function prefetchRouteTarget(target) {
+  const link = target instanceof Element ? target.closest("a[href^='#/']") : null;
+  if (!link) return;
+  const route = parseRoute(link.hash);
+  if (route.name === "work") void getCachedWork(route.id).catch(() => {});
+  if (route.name === "author") void getCachedProfile(route.id).catch(() => {});
+}
+
+function setRouteBusy(busy) {
+  document.body.classList.toggle("route-loading", busy);
+  app.setAttribute("aria-busy", String(busy));
+}
+
 
 const state = {
   session: null,
@@ -1051,7 +1088,22 @@ function moveMobileFeed(direction) {
   const work =
     direction === "next" ? controller.next() : controller.previous();
   if (!work || work.id === currentId) return false;
-  renderMobileHome();
+  const currentCard = document.querySelector("[data-mobile-work-card]");
+  if (!currentCard) return false;
+  currentCard.replaceWith(createMobileWorkCard(work));
+  const previousButton = document.querySelector('[data-action="mobile-feed-previous"]');
+  const nextButton = document.querySelector('[data-action="mobile-feed-next"]');
+  const previousDisabled = controller.isAtStart();
+  const nextDisabled = controller.isAtEnd();
+  if (previousButton) {
+    previousButton.disabled = previousDisabled;
+    previousButton.setAttribute("aria-disabled", String(previousDisabled));
+  }
+  if (nextButton) {
+    nextButton.disabled = nextDisabled;
+    nextButton.setAttribute("aria-disabled", String(nextDisabled));
+  }
+  maybePrefetchMobileNext();
   window.requestAnimationFrame(() => {
     document.querySelector("[data-mobile-work-card]")?.focus({
       preventScroll: true,
@@ -1761,7 +1813,7 @@ async function submitEditorial(event) {
     }
     editorialDialog.close();
     pendingEditorial = null;
-    await renderWork(workId);
+    await renderWork(workId, { refresh: true });
   } catch (error) {
     if (routeToAccountSecurityIfUnverified(error)) return;
     editorialFormMessage.textContent = error.message;
@@ -1791,13 +1843,14 @@ function handleSelection(event) {
   showAnnotateButton(event);
 }
 
-async function renderWork(workId) {
-  showLoading("正在展开作品");
+async function renderWork(workId, { refresh = false } = {}) {
+  setRouteBusy(true);
   cleanupPreparedExport();
+  if (refresh) routeCache.delete(`work:${workId}`);
   state.currentWork = null;
   try {
     const [work, quotes, editorial, highlights] = await Promise.all([
-      service.getWork(workId),
+      getCachedWork(workId),
       service.listWorkQuotes(workId),
       service.getWorkEditorial(workId),
       service.getWorkHighlights(workId),
@@ -2194,6 +2247,8 @@ async function renderWork(workId) {
     replaceContent(app, shell);
   } catch (error) {
     showError("作品无法打开", error.message, true);
+  } finally {
+    setRouteBusy(false);
   }
 }
 
@@ -2770,10 +2825,10 @@ const accountSecurityActions = {
 };
 
 async function renderAuthor(profileId) {
-  showLoading("正在整理作者作品");
+  setRouteBusy(true);
   try {
     const [profile, profileSocial] = await Promise.all([
-      service.getProfile(profileId),
+      getCachedProfile(profileId),
       service.getProfileSocialCounts(profileId),
     ]);
     state.currentProfile = profile;
@@ -2907,9 +2962,11 @@ async function renderAuthor(profileId) {
     replaceContent(app, shell);
   } catch (error) {
     showError("作者主页无法打开", error.message, true);
-  }
+  } finally {
+    setRouteBusy(false);
 }
 
+}
 async function loadDiscussionsPage({ reset = true } = {}) {
   const requestId = ++state.discussionRequestId;
   if (reset) {
@@ -3933,16 +3990,25 @@ async function initialize() {
       state.browse.works = saved.works;
       state.browse.nextCursor = saved.nextCursor;
     }
-    [state.session, state.settings, state.works] = await Promise.all([
+    const backgroundState = Promise.all([
       service.getSession(),
       service.getSiteSettings(),
       service.listWorks(),
     ]);
     if (!saved) await loadBrowseWorks({ reset: true });
-    await loadDiscussionsPage({ reset: true });
-    updateHeader();
     await renderCurrentRoute();
   } catch (error) {
+    void backgroundState
+      .then(([session, settings, works]) => {
+        state.session = session;
+        state.settings = settings;
+        state.works = works;
+        updateHeader();
+        refreshNotificationBadge();
+      })
+      .catch((error) => showToast(`部分资料稍后重试：${error.message}`, "error"));
+    void loadDiscussionsPage({ reset: true });
+
     showError(
       "社区暂时无法加载",
       `${error.message}。请检查网络或 Supabase 配置后重试。`,
@@ -4349,7 +4415,7 @@ document.addEventListener("click", async (event) => {
       try {
         await service.deleteComment(trigger.dataset.commentId);
         showToast("评论已删除。", "success");
-        await renderWork(trigger.dataset.workId);
+        await renderWork(trigger.dataset.workId, { refresh: true });
       } catch (error) {
         if (routeToAccountSecurityIfUnverified(error)) return;
         showToast(error.message);
@@ -4465,7 +4531,7 @@ document.addEventListener("click", async (event) => {
     try {
       await service.unhighlightComment(commentId);
       showToast("已取消优质评论推荐。", "success");
-      await renderWork(workId);
+      await renderWork(workId, { refresh: true });
     } catch (error) {
       if (routeToAccountSecurityIfUnverified(error)) return;
       showToast(error.message);
@@ -4538,7 +4604,7 @@ document.addEventListener("submit", async (event) => {
       pendingAnnotation = null;
       setAnnotateMode(false);
       showToast("批注已发表。", "success");
-      await renderWork(workId);
+      await renderWork(workId, { refresh: true });
     } catch (error) {
       if (routeToAccountSecurityIfUnverified(error)) return;
       annotateFormMessage.textContent = error.message;
@@ -4571,6 +4637,7 @@ document.addEventListener("submit", async (event) => {
             content: data.get("content"),
           });
       localStorage.removeItem(DRAFT_KEY);
+      routeCache.delete(`work:${work.id}`);
       state.editingWork = null;
       await refreshWorks();
       showToast(wasEditing ? "版本已保存。" : "作品已发布。", "success");
@@ -4594,7 +4661,7 @@ document.addEventListener("submit", async (event) => {
       await service.addComment(workId, content);
       form.reset();
       showToast("评论已发表。", "success");
-      await renderWork(workId);
+      await renderWork(workId, { refresh: true });
     } catch (error) {
       if (routeToAccountSecurityIfUnverified(error)) return;
       showToast(error.message);
@@ -4607,7 +4674,7 @@ document.addEventListener("submit", async (event) => {
     try {
       await service.addComment(workId, content, form.dataset.replyForm);
       showToast("回复已发表。", "success");
-      await renderWork(workId);
+      await renderWork(workId, { refresh: true });
     } catch (error) {
       if (routeToAccountSecurityIfUnverified(error)) return;
       showToast(error.message);
@@ -4719,6 +4786,7 @@ document.addEventListener("submit", async (event) => {
             : state.session.profile.pen_name,
         bio: data.get("bio"),
       });
+      routeCache.delete(`profile:${profile.id}`);
       state.session.profile = profile;
       state.works.forEach((work) => {
         if (work.author_id === profile.id) work.author_pen_name = profile.pen_name;
@@ -4800,6 +4868,8 @@ confirmDialog.addEventListener("cancel", (event) => {
 window.addEventListener("hashchange", renderCurrentRoute);
 
 mobileHomeMedia.addEventListener("change", () => {
+document.addEventListener("pointerdown", (event) => prefetchRouteTarget(event.target), { passive: true });
+
   const route = parseRoute(window.location.hash);
   if (route.name === "home") renderHome();
 });

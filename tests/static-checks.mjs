@@ -578,3 +578,41 @@ test("顶部账号菜单与移动底部导航提供私密社交入口", async ()
   assert.match(mobileNav, /id="notificationsNavBadge"/);
   assert.match(mobileNav, /data-nav="notifications"/);
 });
+test("普通阅读与作者导航保留现有页面并延后非首屏请求", async () => {
+  const app = await readFile(new URL("../js/app.js", import.meta.url), "utf8");
+  const workStart = app.indexOf("async function renderWork(");
+  const workEnd = app.indexOf("async function renderWorkVersions", workStart);
+  const authorStart = app.indexOf("async function renderAuthor(profileId)");
+  const authorEnd = app.indexOf("async function loadDiscussionsPage", authorStart);
+  const initializeStart = app.indexOf("async function initialize()");
+  const initializeEnd = app.indexOf("async function handleAuthSubmit", initializeStart);
+  const workRoute = app.slice(workStart, workEnd);
+  const authorRoute = app.slice(authorStart, authorEnd);
+  const initializeBody = app.slice(initializeStart, initializeEnd);
+
+  assert.ok(workStart >= 0, "缺少作品路由");
+  assert.ok(authorStart >= 0, "缺少作者路由");
+  assert.ok(initializeStart >= 0, "缺少初始化流程");
+  assert.doesNotMatch(workRoute, /showLoading\(/);
+  assert.doesNotMatch(authorRoute, /showLoading\(/);
+  assert.match(app, /createRouteCache\(/);
+  assert.match(app, /function\s+prefetchRouteTarget\s*\(/);
+  assert.doesNotMatch(
+    initializeBody,
+    /await\s+loadDiscussionsPage\(\{\s*reset:\s*true\s*\}\)/,
+  );
+});
+
+
+test("移动端使用动态视口并以细进度线反馈路由加载", async () => {
+  const css = await readFile(
+    new URL("../assets/styles.css", import.meta.url),
+    "utf8",
+  );
+  assert.match(css, /body\.route-loading::after/);
+  assert.match(css, /@keyframes\s+route-progress/);
+  assert.match(
+    css,
+    /\.mobile-feed-stage\s*\{[\s\S]*?min-height:\s*calc\(100dvh - var\(--mobile-nav-height\)\)/,
+  );
+});

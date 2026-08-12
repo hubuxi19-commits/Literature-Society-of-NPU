@@ -37,6 +37,24 @@ body {
   line-height: 1.7;
   text-rendering: optimizeLegibility;
 }
+body.route-loading::after {
+  position: fixed;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: 90;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--vermilion), transparent);
+  content: "";
+  pointer-events: none;
+  animation: route-progress 900ms ease-in-out infinite;
+}
+
+@keyframes route-progress {
+  from { transform: translateX(-60%); }
+  to { transform: translateX(60%); }
+}
+
 
 body::before {
   position: fixed;
@@ -2359,6 +2377,7 @@ main {
   .mobile-feed-stage {
     display: grid;
     min-height: calc(100svh - var(--mobile-nav-height));
+    min-height: calc(100dvh - var(--mobile-nav-height));
     grid-template-rows: auto minmax(0, 1fr) auto;
     gap: 0.8rem;
     align-items: center;
@@ -2824,4 +2843,18 @@ main {
   .stack-form select {
     padding: 0.55rem 0.5rem;
   }
+
+@media (max-width: 430px) {
+  .mobile-feed-masthead {
+    padding: 1rem 0.9rem 0.8rem;
+  }
+
+  .mobile-feed-stage {
+    padding: 0.75rem;
+  }
+
+  .mobile-work-card {
+    padding: 1.55rem 1.3rem;
+  }
+}
 }
