@@ -443,15 +443,16 @@ test("迁移完整性：治理函数齐全 + 授权面 + moderation_actions 无�
         (await db.query(`select has_function_privilege('anon', '${sig}', 'EXECUTE') as ok`)).rows[0].ok,
         false, `${sig} anon 不可执行`);
     }
-    // moderation_actions 无 update/delete 策略
+    // moderation_actions 无 update/delete 策略（审计只读红线）：polcmd 'r'=select, 'u'=update, 'd'=delete, 'a'=all
     const { rows: policies } = await db.query(`
-      select polname, pg_get_expr(polqual, polrelid) as qual
+      select polname, polcmd
       from pg_policy
       where polrelid = 'public.moderation_actions'::regclass
     `);
+    assert.ok(policies.length > 0, "moderation_actions 应至少有一条策略");
     for (const row of policies) {
-      assert.ok(!row.qual.includes("update") && !row.qual.includes("delete"),
-        `moderation_actions 不应有 update/delete 策略：${row.qual}`);
+      assert.ok(!["u", "d", "a"].includes(row.polcmd),
+        `moderation_actions 不应有 update/delete/all 策略：${row.polname} (polcmd=${row.polcmd})`);
     }
   } finally {
     await db.close();
