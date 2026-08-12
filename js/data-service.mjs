@@ -58,6 +58,10 @@ function createDemoService(config = {}) {
   state.bookmarks = state.bookmarks ?? [];
   state.commentLikes = state.commentLikes ?? [];
   state.notifications = state.notifications ?? [];
+  state.reports = state.reports ?? [];
+  state.moderationActions = state.moderationActions ?? [];
+  state.editorialNotes = state.editorialNotes ?? []; // { work_id, note_type, content, admin_id, updated_at }
+  state.commentHighlights = state.commentHighlights ?? []; // { comment_id, work_id, reason, admin_id, created_at }
   state.profiles.forEach((profile) => {
     profile.pen_name_changed_at ??= null;
   });
@@ -283,6 +287,7 @@ function createDemoService(config = {}) {
     targetWorkId,
     targetCommentId,
     actor,
+    payload,
   ) => {
     if (!recipient || !actor || recipient === actor) return;
     const aggKey = notificationAggKey(
@@ -306,16 +311,19 @@ function createDemoService(config = {}) {
         last_event_at: nowIso,
         is_read: false,
         agg_key: aggKey,
+        payload: payload ?? null,
       });
       return;
     }
     if (row.actor_ids.includes(actor)) {
       row.last_event_at = nowIso;
+      row.payload = payload ?? row.payload;
       return;
     }
     row.actor_ids = [actor, ...row.actor_ids.slice(0, 2)];
     row.actor_count += 1;
     row.last_event_at = nowIso;
+    row.payload = payload ?? row.payload;
   };
 
   const removeNotificationActor = (
@@ -1040,6 +1048,7 @@ function createDemoService(config = {}) {
             is_read: item.is_read,
             work_title: work?.title ?? null,
             comment_work_id: comment?.work_id ?? null,
+            payload: item.payload ?? null,
           };
         })
         .sort(
@@ -1247,6 +1256,258 @@ function createDemoService(config = {}) {
           String(left.comment_id).localeCompare(String(right.comment_id)),
         );
       return { comments };
+    },
+
+    async reportContent(targetType, targetId, reasonType, detail) {
+      const current = requireVerifiedSession();
+      if (!["work", "comment", "profile"].includes(targetType)) {
+        throw new Error("举报目标类型无效");
+      }
+      if (!["violation", "infringement", "spam", "other"].includes(reasonType)) {
+        throw new Error("举报类型无效");
+      }
+      if (String(detail ?? "").trim().length > 2000) {
+        throw new Error("举报说明不能超过 2000 字");
+      }
+      const existing = state.reports.find(
+        (r) => r.reporter_id === current.profile.id &&
+          r.target_type === targetType && r.target_id === targetId,
+      );
+      if (existing) return { status: "already_reported", report_id: existing.id };
+      if (targetType === "work") {
+        const work = state.works.find((w) => w.id === targetId);
+        if (!work) throw new Error("举报目标不存在");
+        if (work.author_id === current.profile.id) throw new Error("不能举报自己的内容");
+      } else if (targetType === "comment") {
+        const comment = state.comments.find((c) => c.id === targetId && !c.is_deleted);
+        if (!comment) throw new Error("举报目标不存在");
+        if (comment.user_id === current.profile.id) throw new Error("不能举报自己的内容");
+      } else if (targetType === "profile") {
+        const profile = state.profiles.find((p) => p.id === targetId);
+        if (!profile) throw new Error("举报目标不存在");
+        if (profile.id === current.profile.id) throw new Error("不能举报自己的内容");
+      }
+      const report = {
+        id: makeId("report"),
+        reporter_id: current.profile.id,
+        target_type: targetType,
+        target_id: targetId,
+        reason_type: reasonType,
+        detail: String(detail ?? "").trim() || null,
+        status: "pending",
+        created_at: now().toISOString(),
+        handled_at: null,
+        handled_by: null,
+      };
+      state.reports.push(report);
+      return { status: "reported", report_id: report.id };
+    },
+
+    async moderateReport(reportId, decision, actionType, internalNote) {
+      requireVerifiedSession();
+      if (!isAdmin()) throw new Error("没有权限执行此操作");
+      if (!["resolved", "dismissed"].includes(decision)) throw new Error("处置结果无效");
+      if (decision === "resolved" && !["hide_work", "hide_comment", "warn_user"].includes(actionType)) {
+        throw new Error("请选择处置动作");
+      }
+      if (decision === "resolved" && !String(internalNote ?? "").trim()) {
+        throw new Error("请填写内部说明");
+      }
+      if (decision === "dismissed" && actionType) throw new Error("驳回处置不应填写动作");
+      const report = state.reports.find((r) => r.id === reportId);
+      if (!report) throw new Error("举报不存在");
+      if (report.status !== "pending") throw new Error("该举报已处置");
+
+      if (decision === "resolved") {
+        if (actionType === "hide_work") {
+          const work = state.works.find((w) => w.id === report.target_id);
+          if (work) work.status = "hidden";
+        } else if (actionType === "hide_comment") {
+          const comment = state.comments.find((c) => c.id === report.target_id);
+          if (comment) comment.is_deleted = true;
+        }
+      }
+      const action = {
+        id: makeId("action"),
+        report_id: report.id,
+        target_type: report.target_type,
+        target_id: report.target_id,
+        decision,
+        action_type: decision === "resolved" ? actionType : null,
+        internal_note: String(internalNote ?? "").trim() || null,
+        admin_id: session.profile.id,
+        created_at: now().toISOString(),
+      };
+      state.moderationActions.unshift(action);
+      report.status = decision;
+      report.handled_at = now().toISOString();
+      report.handled_by = session.profile.id;
+
+      // 通知被举报者（不含内部说明与举报者身份）
+      const recipient = await this.resolveReportRecipient(report);
+      if (recipient && recipient.id !== session.profile.id) {
+        const payload = {
+          decision,
+          action_type: decision === "resolved" ? actionType : null,
+        };
+        upsertNotification(
+          recipient.id,
+          "moderation_outcome",
+          report.target_type === "work" ? report.target_id : null,
+          report.target_type === "comment" ? report.target_id : null,
+          session.profile.id,
+          payload,
+        );
+      }
+      return {
+        action_id: action.id,
+        status: decision,
+        action_type: decision === "resolved" ? actionType : null,
+      };
+    },
+
+    async setWorkEditorialNote(workId, noteType, content) {
+      requireVerifiedSession();
+      if (!isAdmin()) throw new Error("没有权限执行此操作");
+      if (!["recommendation_reason", "editorial_note"].includes(noteType)) {
+        throw new Error("点评类型无效");
+      }
+      const text = String(content ?? "").trim();
+      if (!text || Array.from(text).length > 2000) throw new Error("点评内容必须为 1 至 2000 字");
+      if (!state.works.some((w) => w.id === workId)) throw new Error("作品不存在");
+      const existing = state.editorialNotes.find(
+        (n) => n.work_id === workId && n.note_type === noteType,
+      );
+      if (existing) {
+        existing.content = text;
+        existing.admin_id = session.profile.id;
+        existing.updated_at = now().toISOString();
+      } else {
+        state.editorialNotes.push({
+          id: makeId("note"),
+          work_id: workId,
+          note_type: noteType,
+          content: text,
+          admin_id: session.profile.id,
+          updated_at: now().toISOString(),
+        });
+      }
+      return { id: existing?.id ?? "note", work_id: workId, note_type: noteType };
+    },
+
+    async highlightComment(commentId, reason) {
+      requireVerifiedSession();
+      if (!isAdmin()) throw new Error("没有权限执行此操作");
+      const text = String(reason ?? "").trim();
+      if (!text || Array.from(text).length > 500) throw new Error("推荐理由必须为 1 至 500 字");
+      const comment = state.comments.find((c) => c.id === commentId && !c.is_deleted);
+      if (!comment) throw new Error("评论不存在");
+      const work = state.works.find((w) => w.id === comment.work_id);
+      if (!work || work.status !== "published") throw new Error("只能推荐公开作品上的评论");
+      const existing = state.commentHighlights.find((h) => h.comment_id === commentId);
+      if (existing) {
+        existing.reason = text;
+        existing.admin_id = session.profile.id;
+      } else {
+        state.commentHighlights.push({
+          id: makeId("hl"),
+          comment_id: commentId,
+          work_id: comment.work_id,
+          reason: text,
+          admin_id: session.profile.id,
+          created_at: now().toISOString(),
+        });
+      }
+      if (comment.user_id !== session.profile.id) {
+        upsertNotification(
+          comment.user_id,
+          "comment_highlight",
+          comment.work_id,
+          commentId,
+          session.profile.id,
+        );
+      }
+      return { id: existing?.id ?? "hl", comment_id: commentId };
+    },
+
+    async unhighlightComment(commentId) {
+      requireVerifiedSession();
+      if (!isAdmin()) throw new Error("没有权限执行此操作");
+      state.commentHighlights = state.commentHighlights.filter(
+        (h) => h.comment_id !== commentId,
+      );
+    },
+
+    async listReports(status = "pending") {
+      if (!isAdmin()) throw new Error("没有权限执行此操作");
+      const rows = state.reports
+        .filter((r) => r.status === status)
+        .map((r) => ({
+          ...r,
+          reporter_pen_name: getProfileRecord(r.reporter_id)?.pen_name ?? "未知",
+          target_preview: this.reportTargetPreview(r),
+        }));
+      return { reports: rows };
+    },
+
+    async listModerationActions() {
+      if (!isAdmin()) throw new Error("没有权限执行此操作");
+      const rows = state.moderationActions.map((a) => ({
+        ...a,
+        admin_pen_name: getProfileRecord(a.admin_id)?.pen_name ?? "未知",
+        target_preview: this.reportTargetPreview(a),
+      }));
+      return { actions: rows };
+    },
+
+    async getWorkEditorial(workId) {
+      const rec = state.editorialNotes.find(
+        (n) => n.work_id === workId && n.note_type === "recommendation_reason",
+      );
+      const ed = state.editorialNotes.find(
+        (n) => n.work_id === workId && n.note_type === "editorial_note",
+      );
+      const toNote = (note) =>
+        note
+          ? { content: note.content, admin_pen_name: getProfileRecord(note.admin_id)?.pen_name ?? null, updated_at: note.updated_at }
+          : { content: null, admin_pen_name: null, updated_at: null };
+      return { recommendation_reason: toNote(rec), editorial_note: toNote(ed) };
+    },
+
+    async getWorkHighlights(workId) {
+      const highlights = state.commentHighlights
+        .filter((h) => h.work_id === workId)
+        .map((h) => ({
+          comment_id: h.comment_id,
+          reason: h.reason,
+          admin_pen_name: getProfileRecord(h.admin_id)?.pen_name ?? null,
+          created_at: h.created_at,
+        }));
+      return { highlights };
+    },
+
+    resolveReportRecipient(report) {
+      if (report.target_type === "work") {
+        const work = state.works.find((w) => w.id === report.target_id);
+        return work ? getProfileRecord(work.author_id) : null;
+      }
+      if (report.target_type === "comment") {
+        const comment = state.comments.find((c) => c.id === report.target_id);
+        return comment ? getProfileRecord(comment.user_id) : null;
+      }
+      return getProfileRecord(report.target_id);
+    },
+
+    reportTargetPreview(report) {
+      if (report.target_type === "work") {
+        const work = state.works.find((w) => w.id === report.target_id);
+        return work?.title ?? "";
+      }
+      if (report.target_type === "comment") {
+        const comment = state.comments.find((c) => c.id === report.target_id);
+        return comment ? Array.from(comment.content).slice(0, 60).join("") : "";
+      }
+      return getProfileRecord(report.target_id)?.pen_name ?? "";
     },
 
     async getAccountSecurityStatus() {
