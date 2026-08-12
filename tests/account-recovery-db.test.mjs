@@ -67,18 +67,22 @@ function withoutAccountSecurityBlock(sql) {
   );
   // 社交通知迁移经自身测试单独加载，增量模式跳过 SOCIAL 块以避免
   // 其 RPC 依赖的 work_versions/comment_quotes 与 is_account_write_allowed 出现缺口。
+  let body = after;
   const socialStart = after.indexOf(SOCIAL_BLOCK_START);
   if (socialStart !== -1) {
     const socialEnd = after.indexOf(SOCIAL_BLOCK_END, socialStart);
     if (socialEnd !== -1) {
-      return (
-        sql.slice(0, start) +
+      body =
         after.slice(0, socialStart) +
-        after.slice(socialEnd + SOCIAL_BLOCK_END.length)
-      );
+        after.slice(socialEnd + SOCIAL_BLOCK_END.length);
     }
   }
-  return sql.slice(0, start) + after;
+  // 发布五治理段引用通知表与账号写门禁，增量模式一并跳过（治理迁移经自身测试单独加载）。
+  const governanceStart = body.indexOf("-- GOVERNANCE_ADMIN_START");
+  if (governanceStart !== -1) {
+    body = body.slice(0, governanceStart);
+  }
+  return sql.slice(0, start) + body;
 }
 
 async function createIncrementalDatabase() {

@@ -11,6 +11,22 @@ const socialMigrationUrl = new URL(
   import.meta.url,
 );
 
+// schema.sql 是合并后的完整结构；本测试以「基础结构 + 社交通知迁移」的方式
+// 验证迁移本身，因此把已并入 schema.sql 的 SOCIAL 与发布五 GOVERNANCE 段跳过，
+// 避免迁移里的 5 参 upsert_notification 与治理扩展的 6 参重载形成歧义。
+const SOCIAL_START = "-- SOCIAL_NOTIFICATIONS_START";
+const SOCIAL_END = "-- SOCIAL_NOTIFICATIONS_END";
+const GOVERNANCE_START = "-- GOVERNANCE_ADMIN_START";
+const GOVERNANCE_END = "-- GOVERNANCE_ADMIN_END";
+
+function stripBlock(sql, start, end) {
+  const startIndex = sql.indexOf(start);
+  if (startIndex === -1) return sql;
+  const endIndex = sql.indexOf(end, startIndex);
+  if (endIndex === -1) throw new Error(`${start} 未闭合`);
+  return sql.slice(0, startIndex) + sql.slice(endIndex + end.length);
+}
+
 const USER_A = "10000000-0000-4000-8000-000000000001"; // 松声
 const USER_B = "10000000-0000-4000-8000-000000000002"; // 白露
 const USER_C = "10000000-0000-4000-8000-000000000003"; // 杏雨
@@ -41,7 +57,12 @@ async function createDatabase() {
     grant usage on schema auth to anon, authenticated, service_role;
     grant execute on function auth.uid() to anon, authenticated, service_role;
   `);
-  await db.exec(await readFile(schemaUrl, "utf8"));
+  const schema = stripBlock(
+    stripBlock(await readFile(schemaUrl, "utf8"), SOCIAL_START, SOCIAL_END),
+    GOVERNANCE_START,
+    GOVERNANCE_END,
+  );
+  await db.exec(schema);
   await db.exec(await readFile(socialMigrationUrl, "utf8"));
   return db;
 }
