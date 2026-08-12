@@ -188,6 +188,9 @@ export function parseRoute(hash = "#/") {
   if (parts.length === 1 && parts[0] === "notifications") {
     return { name: "notifications" };
   }
+  if (parts.length === 1 && parts[0] === "admin") {
+    return { name: "admin" };
+  }
   if (parts.length === 2 && parts[0] === "my") {
     if (parts[1] === "following") return { name: "my-following" };
     if (parts[1] === "followers") return { name: "my-followers" };
@@ -225,6 +228,25 @@ export function buildNotificationText(notification) {
       return `${actor} 收藏了你的作品${title}`;
     case "comment_like":
       return `${actor} 赞了你的评论`;
+    case "comment_highlight":
+      return `${actor} 推荐了你的评论`;
+    case "moderation_outcome": {
+      const decision = notification?.payload?.decision;
+      const actionLabel = notification?.payload?.action_type === "hide_work"
+        ? "，作品已隐藏"
+        : notification?.payload?.action_type === "hide_comment"
+          ? "，评论已隐藏"
+          : notification?.payload?.action_type === "warn_user"
+            ? "，已向你发出提醒"
+            : "";
+      if (decision === "resolved") {
+        return `管理员处理了与你相关的举报：成立${actionLabel}`;
+      }
+      if (decision === "dismissed") {
+        return `管理员处理了与你相关的举报：不成立`;
+      }
+      return `管理员处理了与你相关的举报`;
+    }
     default:
       return `${actor} 与你互动了`;
   }

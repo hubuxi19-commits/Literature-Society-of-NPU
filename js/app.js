@@ -3289,6 +3289,7 @@ async function renderCurrentRoute() {
     else if (route.name === "discussions") await loadDiscussionsPage({ reset: true });
     else if (route.name === "submissions") renderSubmissions();
     else if (route.name === "notifications") await renderNotifications();
+    else if (route.name === "admin") renderAdmin();
     else if (route.name === "my-following") await renderMyListPageRoute("following");
     else if (route.name === "my-followers") await renderMyListPageRoute("followers");
     else if (route.name === "my-bookmarks") await renderMyListPageRoute("bookmarks");

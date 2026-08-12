@@ -169,6 +169,8 @@ test("社交路由解析到通知与我的关注/粉丝/收藏", () => {
   assert.deepEqual(parseRoute("#/my/bookmarks"), { name: "my-bookmarks" });
   assert.deepEqual(parseRoute("#/my/"), { name: "not-found" });
   assert.deepEqual(parseRoute("#/my/following/extra"), { name: "not-found" });
+  assert.deepEqual(parseRoute("#/admin"), { name: "admin" });
+  assert.deepEqual(parseRoute("#/admin/extra"), { name: "not-found" });
 });
 
 test("相对时间格式化：从刚发生到超过一年回退日期", () => {
@@ -223,6 +225,21 @@ test("通知条目文案：单人、多人折叠 +N 与按事件类型拼接", (
 
   const unknown = { event_type: "unknown", actor_pen_names: [], actor_count: 0, work_title: null };
   assert.equal(buildNotificationText(unknown), "有人 与你互动了");
+});
+
+test("通知文案：comment_highlight 与 moderation_outcome", () => {
+  assert.equal(
+    buildNotificationText({ event_type: "comment_highlight", actor_pen_names: ["编辑部"], actor_count: 1 }),
+    "编辑部 推荐了你的评论",
+  );
+  assert.equal(
+    buildNotificationText({ event_type: "moderation_outcome", actor_pen_names: ["编辑部"], actor_count: 1, payload: { decision: "resolved", action_type: "hide_work" } }),
+    "管理员处理了与你相关的举报：成立，作品已隐藏",
+  );
+  assert.equal(
+    buildNotificationText({ event_type: "moderation_outcome", actor_pen_names: ["编辑部"], actor_count: 1, payload: { decision: "dismissed", action_type: null } }),
+    "管理员处理了与你相关的举报：不成立",
+  );
 });
 
 test("通知 actor 文案：计数超过预览长度时追加等 N 人", () => {
