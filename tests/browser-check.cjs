@@ -1450,8 +1450,8 @@ async function governanceFlow(browser, browserMessages) {
   await login(page, "2023000001", "editor88");
   await goToHash(page, "#/admin", "管理台");
   await expectVisible(page.locator(".report-item"), "待处理举报列表");
-  if ((await page.locator(".report-item").count()) < 1) {
-    throw new Error("待处理举报应为至少 1 条");
+  if ((await page.locator(".report-item").count()) !== 1) {
+    throw new Error("待处理举报应为 1 条");
   }
   // 处置：成立 + 隐藏作品 + 内部说明
   await page.locator(".moderate-form select[name='decision']").selectOption("resolved");
@@ -1461,7 +1461,7 @@ async function governanceFlow(browser, browserMessages) {
   await expectVisible(page.getByText("处置已提交"), "处置成功提示");
   await page.getByRole("tab", { name: /处置与审计/ }).click();
   await expectVisible(page.locator(".audit-item"), "审计记录列表");
-  if (!(await page.locator(".audit-item").innerText()).includes("内部说明：确认违规")) {
+  if (!(await page.locator(".audit-item").first().innerText()).includes("内部说明：确认违规")) {
     throw new Error("审计记录缺少内部说明");
   }
 
