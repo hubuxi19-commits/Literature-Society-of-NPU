@@ -2755,3 +2755,10 @@ main {
 }
 .comment-highlight-mark { font-weight: 600; color: var(--cinnabar, #9a3b3b); }
 .comment-highlight-reason { margin-top: 0.25rem; font-size: 0.95em; }
+
+.submission-checklist {
+  border: 1px dashed currentColor; padding: 1rem; margin-bottom: 1.5rem;
+  background: rgba(128, 128, 128, 0.05);
+}
+.submission-checklist ul { margin: 0.5rem 0 0.25rem; padding-left: 1.2rem; }
+.submission-checklist-note { opacity: 0.75; font-size: 0.85em; margin-top: 0.5rem; }

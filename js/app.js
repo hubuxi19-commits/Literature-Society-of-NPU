@@ -2363,6 +2363,20 @@ async function renderWrite(options = {}) {
           }),
     ]),
   );
+  const checklist = element("section", {
+    className: "submission-checklist",
+    attrs: { "aria-label": "投稿前提醒" },
+  }, [
+    element("p", { className: "eyebrow", text: "BEFORE YOU SUBMIT" }),
+    element("ul", {}, [
+      element("li", { text: "确保作品为本人原创。" }),
+      element("li", { text: "引用或化用他人文字时，注明来源。" }),
+      element("li", { text: "发布前检查分段与标点，避免整段堆叠。" }),
+      element("li", { text: "建议去读一读其他社员的新作，参与互评。" }),
+    ]),
+    element("p", { className: "submission-checklist-note", text: "以上仅为提醒，不会阻止发布。" }),
+  ]);
+  form.append(checklist);
   const titleLabel = element("label", {}, [
     element("span", { text: "标题" }),
     element("input", {
