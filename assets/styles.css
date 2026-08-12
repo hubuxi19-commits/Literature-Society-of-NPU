@@ -2810,6 +2810,16 @@ main {
     font-size: 13px;
   }
 
+  /* 句子内嵌的 text-button（如“现在登录”）保持与句同行：撤销触控高度与纵向内边距，
+     避免热区把段落撑高；独立按钮仍享受 ≥44px 触控目标。
+     注：button 无法计算为 display:inline（Chromium 退回 inline-block），
+     因此在句子中通过清空纵向内边距来与文本行等高。 */
+  .comments-block p .text-button {
+    min-height: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+  }
+
   .moderate-form select,
   .stack-form select {
     padding: 0.55rem 0.5rem;
