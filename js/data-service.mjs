@@ -1266,7 +1266,7 @@ function createDemoService(config = {}) {
       if (!["violation", "infringement", "spam", "other"].includes(reasonType)) {
         throw new Error("举报类型无效");
       }
-      if (String(detail ?? "").trim().length > 2000) {
+      if (Array.from(String(detail ?? "").trim()).length > 2000) {
         throw new Error("举报说明不能超过 2000 字");
       }
       const existing = state.reports.find(
@@ -1317,6 +1317,17 @@ function createDemoService(config = {}) {
       const report = state.reports.find((r) => r.id === reportId);
       if (!report) throw new Error("举报不存在");
       if (report.status !== "pending") throw new Error("该举报已处置");
+      if (decision === "resolved") {
+        if (actionType === "hide_work" && report.target_type !== "work") {
+          throw new Error("举报目标类型与动作不匹配");
+        }
+        if (actionType === "hide_comment" && report.target_type !== "comment") {
+          throw new Error("举报目标类型与动作不匹配");
+        }
+        if (actionType === "warn_user" && report.target_type !== "profile") {
+          throw new Error("举报目标类型与动作不匹配");
+        }
+      }
 
       if (decision === "resolved") {
         if (actionType === "hide_work") {
@@ -1375,6 +1386,7 @@ function createDemoService(config = {}) {
       const text = String(content ?? "").trim();
       if (!text || Array.from(text).length > 2000) throw new Error("点评内容必须为 1 至 2000 字");
       if (!state.works.some((w) => w.id === workId)) throw new Error("作品不存在");
+      let noteId;
       const existing = state.editorialNotes.find(
         (n) => n.work_id === workId && n.note_type === noteType,
       );
@@ -1382,17 +1394,20 @@ function createDemoService(config = {}) {
         existing.content = text;
         existing.admin_id = session.profile.id;
         existing.updated_at = now().toISOString();
+        noteId = existing.id;
       } else {
-        state.editorialNotes.push({
+        const row = {
           id: makeId("note"),
           work_id: workId,
           note_type: noteType,
           content: text,
           admin_id: session.profile.id,
           updated_at: now().toISOString(),
-        });
+        };
+        state.editorialNotes.push(row);
+        noteId = row.id;
       }
-      return { id: existing?.id ?? "note", work_id: workId, note_type: noteType };
+      return { id: noteId, work_id: workId, note_type: noteType };
     },
 
     async highlightComment(commentId, reason) {
@@ -1404,19 +1419,23 @@ function createDemoService(config = {}) {
       if (!comment) throw new Error("评论不存在");
       const work = state.works.find((w) => w.id === comment.work_id);
       if (!work || work.status !== "published") throw new Error("只能推荐公开作品上的评论");
+      let highlightId;
       const existing = state.commentHighlights.find((h) => h.comment_id === commentId);
       if (existing) {
         existing.reason = text;
         existing.admin_id = session.profile.id;
+        highlightId = existing.id;
       } else {
-        state.commentHighlights.push({
+        const row = {
           id: makeId("hl"),
           comment_id: commentId,
           work_id: comment.work_id,
           reason: text,
           admin_id: session.profile.id,
           created_at: now().toISOString(),
-        });
+        };
+        state.commentHighlights.push(row);
+        highlightId = row.id;
       }
       if (comment.user_id !== session.profile.id) {
         upsertNotification(
@@ -1427,7 +1446,7 @@ function createDemoService(config = {}) {
           session.profile.id,
         );
       }
-      return { id: existing?.id ?? "hl", comment_id: commentId };
+      return { id: highlightId, comment_id: commentId };
     },
 
     async unhighlightComment(commentId) {
