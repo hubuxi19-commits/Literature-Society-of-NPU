@@ -30,12 +30,26 @@ test("排版设置通过样式变量和语义类应用到稿页", () => {
   const values = new Map();
   const page = { classList: { values: new Set(), add(value) { this.values.add(value); }, remove(...items) { items.forEach((item) => this.values.delete(item)); } }, style: { setProperty(name, value) { values.set(name, value); } } };
   applyExportLayout(page, { font: "fangsong", fontSize: 42, alignment: "right", lineHeight: 1.7, margin: "compact", showHeader: true, paper: "white" });
-  assert.equal(values.get("--export-font-family"), '\"FangSong\", \"STFangsong\", serif');
+  assert.equal(values.get("--export-font-family"), '\"FangSong\", \"FangSong_GB2312\", \"STFangsong\", fangsong');
   assert.equal(values.get("--export-body-font-size"), "42px");
   assert.equal(values.get("--export-body-line-height"), "1.7");
   assert.equal(values.get("--export-page-padding-x"), "72px");
   assert.equal(values.get("--export-text-align"), "right");
   assert.equal(page.classList.values.has("export-page--paper-white"), true);
+});
+
+test("仿宋与楷体使用不同于宋体的跨平台回退字体", () => {
+  const values = new Map();
+  const page = {
+    classList: { add() {}, remove() {} },
+    style: { setProperty(name, value) { values.set(name, value); } },
+  };
+  applyExportLayout(page, { ...DEFAULT_EXPORT_LAYOUT, font: "fangsong" });
+  assert.match(values.get("--export-font-family"), /fangsong/i);
+  assert.doesNotMatch(values.get("--export-font-family"), /serif\s*$/i);
+
+  applyExportLayout(page, { ...DEFAULT_EXPORT_LAYOUT, font: "kai" });
+  assert.match(values.get("--export-font-family"), /cursive\s*$/i);
 });
 
 test("导出尺寸固定为手机竖图", () => {

@@ -16,8 +16,8 @@ export const DEFAULT_EXPORT_LAYOUT = Object.freeze({
 
 const EXPORT_FONTS = Object.freeze({
   song: '"Noto Serif SC", "Songti SC", SimSun, serif',
-  fangsong: '"FangSong", "STFangsong", serif',
-  kai: '"Kaiti SC", KaiTi, STKaiti, serif',
+  fangsong: '"FangSong", "FangSong_GB2312", "STFangsong", fangsong',
+  kai: '"Kaiti SC", "KaiTi", "KaiTi_GB2312", "STKaiti", cursive',
   hei: '"Noto Sans SC", "Microsoft YaHei", sans-serif',
 });
 const EXPORT_MARGINS = Object.freeze({ compact: 72, standard: 96, wide: 128 });
