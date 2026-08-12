@@ -3,6 +3,57 @@ import { formatDate, isPoetryCategory } from "./utils.mjs";
 export const EXPORT_WIDTH = 1080;
 export const EXPORT_HEIGHT = 1920;
 
+export const DEFAULT_EXPORT_LAYOUT = Object.freeze({
+  version: 1,
+  font: "song",
+  fontSize: 36,
+  alignment: "left",
+  lineHeight: 1.9,
+  margin: "standard",
+  showHeader: true,
+  paper: "rice",
+});
+
+const EXPORT_FONTS = Object.freeze({
+  song: '"Noto Serif SC", "Songti SC", SimSun, serif',
+  fangsong: '"FangSong", "STFangsong", serif',
+  kai: '"Kaiti SC", KaiTi, STKaiti, serif',
+  hei: '"Noto Sans SC", "Microsoft YaHei", sans-serif',
+});
+const EXPORT_MARGINS = Object.freeze({ compact: 72, standard: 96, wide: 128 });
+const VALID_ALIGNMENTS = new Set(["left", "center", "right"]);
+const VALID_LINE_HEIGHTS = new Set([1.5, 1.7, 1.9, 2.1]);
+const VALID_PAPERS = new Set(["rice", "white", "xuan"]);
+
+export function normalizeExportLayout(value) {
+  if (!value || (value.version !== undefined && value.version !== 1)) {
+    return { ...DEFAULT_EXPORT_LAYOUT };
+  }
+  const fontSize = Number(value.fontSize);
+  return {
+    version: 1,
+    font: Object.hasOwn(EXPORT_FONTS, value.font) ? value.font : DEFAULT_EXPORT_LAYOUT.font,
+    fontSize: Number.isInteger(fontSize) && fontSize >= 28 && fontSize <= 52 && fontSize % 2 === 0 ? fontSize : DEFAULT_EXPORT_LAYOUT.fontSize,
+    alignment: VALID_ALIGNMENTS.has(value.alignment) ? value.alignment : DEFAULT_EXPORT_LAYOUT.alignment,
+    lineHeight: VALID_LINE_HEIGHTS.has(Number(value.lineHeight)) ? Number(value.lineHeight) : DEFAULT_EXPORT_LAYOUT.lineHeight,
+    margin: Object.hasOwn(EXPORT_MARGINS, value.margin) ? value.margin : DEFAULT_EXPORT_LAYOUT.margin,
+    showHeader: typeof value.showHeader === "boolean" ? value.showHeader : DEFAULT_EXPORT_LAYOUT.showHeader,
+    paper: VALID_PAPERS.has(value.paper) ? value.paper : DEFAULT_EXPORT_LAYOUT.paper,
+  };
+}
+
+export function applyExportLayout(page, value) {
+  const layout = normalizeExportLayout(value);
+  page.classList.remove("export-page--paper-rice", "export-page--paper-white", "export-page--paper-xuan");
+  page.classList.add(`export-page--paper-${layout.paper}`);
+  page.style.setProperty("--export-font-family", EXPORT_FONTS[layout.font]);
+  page.style.setProperty("--export-body-font-size", `${layout.fontSize}px`);
+  page.style.setProperty("--export-body-line-height", String(layout.lineHeight));
+  page.style.setProperty("--export-page-padding-x", `${EXPORT_MARGINS[layout.margin]}px`);
+  page.style.setProperty("--export-text-align", layout.alignment);
+  return layout;
+}
+
 const WORDMARK_URL = new URL(
   "../assets/student-literature-society-wordmark.png",
   import.meta.url,
@@ -166,10 +217,14 @@ function createUnitNode(doc, unit) {
 }
 
 function createExportPage(doc, work, wordmarkUrl, options = {}) {
+  const layout = normalizeExportLayout(options.layout);
+  const showTitle = options.showTitle !== false && layout.showHeader;
   const page = doc.createElement("article");
-  page.className = options.showTitle === false
+  page.className = showTitle === false
     ? "export-page export-page--continuation"
     : "export-page";
+  applyExportLayout(page, layout);
+  page.classList.toggle("export-page--hide-author", !layout.showHeader);
 
   const body = doc.createElement("div");
   body.className = "export-body";
@@ -190,7 +245,7 @@ function createExportPage(doc, work, wordmarkUrl, options = {}) {
   wordmark.src = wordmarkUrl;
 
   footer.append(authorDate, pageNumber, wordmark);
-  if (options.showTitle !== false) {
+  if (showTitle) {
     const title = doc.createElement("h1");
     title.className = "export-title";
     title.textContent = String(work.title ?? "");
@@ -314,39 +369,26 @@ export function downloadExportFile(file, options = {}) {
   }
 }
 
-export async function exportWorkImages(work, options = {}) {
+export async function prepareExportPages(work, options = {}) {
   const doc = options.document ?? globalThis.document;
   const win = doc?.defaultView ?? globalThis.window;
   if (!doc?.body || !win) throw new Error("当前环境无法生成作品图片");
-
+  const layout = normalizeExportLayout(options.layout);
+  const pageOptions = { layout };
   const root = doc.createElement("div");
   root.className = "export-render-root";
   root.setAttribute("aria-hidden", "true");
   doc.body.append(root);
 
   try {
-    const firstPage = createExportPage(
-      doc,
-      work,
-      options.wordmarkUrl ?? WORDMARK_URL,
-    );
+    const firstPage = createExportPage(doc, work, options.wordmarkUrl ?? WORDMARK_URL, pageOptions);
     root.append(firstPage);
     await (doc.fonts?.ready ?? Promise.resolve());
-
-    const wordmark = firstPage.querySelector(".export-wordmark");
-    const wordmarkDataUrl = await loadWordmarkDataUrl(wordmark, win);
     const measurementBody = firstPage.querySelector(".export-body");
     const maxHeight = measurementBody.getBoundingClientRect().height;
-    const continuationPage = createExportPage(
-      doc,
-      work,
-      options.wordmarkUrl ?? WORDMARK_URL,
-      { showTitle: false },
-    );
+    const continuationPage = createExportPage(doc, work, options.wordmarkUrl ?? WORDMARK_URL, { ...pageOptions, showTitle: false });
     root.append(continuationPage);
-    const continuationMaxHeight = continuationPage
-      .querySelector(".export-body")
-      .getBoundingClientRect().height;
+    const continuationMaxHeight = continuationPage.querySelector(".export-body").getBoundingClientRect().height;
     const measure = (unit) => {
       const node = createUnitNode(doc, unit);
       measurementBody.replaceChildren(node);
@@ -354,34 +396,34 @@ export async function exportWorkImages(work, options = {}) {
       measurementBody.replaceChildren();
       return height;
     };
-
-    const units = splitExportUnits(work.content, work.category);
-    const plannedPages = paginateExportUnits(
-      units,
-      measure,
-      maxHeight,
-      continuationMaxHeight,
-    );
+    const plannedPages = paginateExportUnits(splitExportUnits(work.content, work.category), measure, maxHeight, continuationMaxHeight);
     if (!plannedPages.length) plannedPages.push([]);
     continuationPage.remove();
-
-    const pageElements = plannedPages.map((pageUnits, pageIndex) => {
-      const page =
-        pageIndex === 0
-          ? firstPage
-          : createExportPage(doc, work, options.wordmarkUrl ?? WORDMARK_URL, {
-              showTitle: false,
-            });
-      const body = page.querySelector(".export-body");
-      body.replaceChildren(...pageUnits.map((unit) => createUnitNode(doc, unit)));
-      page.querySelector(".export-page-number").textContent =
-        plannedPages.length > 1 ? `${pageIndex + 1} / ${plannedPages.length}` : "";
+    const pages = plannedPages.map((pageUnits, pageIndex) => {
+      const page = pageIndex === 0 ? firstPage : createExportPage(doc, work, options.wordmarkUrl ?? WORDMARK_URL, { ...pageOptions, showTitle: false });
+      page.querySelector(".export-body").replaceChildren(...pageUnits.map((unit) => createUnitNode(doc, unit)));
+      page.querySelector(".export-page-number").textContent = plannedPages.length > 1 ? `${pageIndex + 1} / ${plannedPages.length}` : "";
       if (pageIndex > 0) root.append(page);
       return page;
     });
+    return { root, pages, layout, cleanup() { root.remove(); } };
+  } catch (error) {
+    root.remove();
+    throw error;
+  }
+}
 
+export async function exportWorkImages(work, options = {}) {
+  const prepared = await prepareExportPages(work, options);
+  const doc = options.document ?? globalThis.document;
+  const win = doc.defaultView ?? globalThis.window;
+
+  try {
+    const firstPage = prepared.pages[0];
+    const wordmark = firstPage.querySelector(".export-wordmark");
+    const wordmarkDataUrl = await loadWordmarkDataUrl(wordmark, win);
     const blobs = [];
-    for (const [pageIndex, page] of pageElements.entries()) {
+    for (const [pageIndex, page] of prepared.pages.entries()) {
       assertExportPageFits(page, pageIndex);
       blobs.push(await renderPageBlob(page, wordmarkDataUrl, doc, win));
     }
@@ -398,6 +440,6 @@ export async function exportWorkImages(work, options = {}) {
 
     return { blobs, files, shared: false };
   } finally {
-    root.remove();
+    prepared.cleanup();
   }
 }

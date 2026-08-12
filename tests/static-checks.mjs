@@ -206,6 +206,15 @@ test("阅读页通过本地素笺模板生成 1080×1920 PNG", async () => {
 
   assert.match(app, /data(?:set)?:\s*\{\s*action:\s*"export-work"/);
   assert.match(app, /text:\s*"生成作品图片"/);
+  assert.match(app, /EXPORT_LAYOUT_KEY\s*=\s*"wenyuan-export-layout-v1"/);
+  assert.match(app, /prepareExportPages\(/);
+  assert.match(app, /exportDialog\.showModal\(\)/);
+  assert.match(app, /exportWorkImages\(work,\s*\{\s*layout\s*\}\)/);
+  assert.match(exporter, /DEFAULT_EXPORT_LAYOUT/);
+  assert.match(exporter, /normalizeExportLayout/);
+  assert.match(exporter, /prepareExportPages/);
+  assert.match(css, /\.export-layout-dialog/);
+  assert.match(css, /\.export-workbench/);
   assert.match(app, /currentExport:\s*null/);
   assert.match(app, /function\s+cleanupPreparedExport\s*\(/);
   assert.match(app, /URL\.revokeObjectURL\(/);

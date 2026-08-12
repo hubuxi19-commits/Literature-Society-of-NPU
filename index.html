@@ -475,6 +475,34 @@
       </form>
     </dialog>
 
+    <dialog class="modal export-layout-dialog" id="exportDialog" aria-labelledby="exportDialogTitle">
+      <form id="exportLayoutForm" class="export-workbench">
+        <header class="export-workbench-head">
+          <div><p class="eyebrow">EXPORT STUDIO</p><h2 id="exportDialogTitle">导出排版</h2></div>
+          <button class="close-button" type="button" data-action="close-export-layout" aria-label="关闭导出排版">关闭</button>
+        </header>
+        <section class="export-layout-controls" aria-label="排版设置">
+          <p class="export-template-note">已应用推荐的「通用素笺」模板，可直接生成，也可微调。</p>
+          <div class="export-control-grid">
+            <label><span>字体</span><select name="font"><option value="song">宋体</option><option value="fangsong">仿宋</option><option value="kai">楷体</option><option value="hei">黑体</option></select></label>
+            <label><span>字号 <output data-export-font-size>36px</output></span><input name="fontSize" type="range" min="28" max="52" step="2" value="36"></label>
+            <fieldset><legend>对齐</legend><div class="export-segmented"><label><input type="radio" name="alignment" value="left"><span>居左</span></label><label><input type="radio" name="alignment" value="center"><span>居中</span></label><label><input type="radio" name="alignment" value="right"><span>居右</span></label></div></fieldset>
+            <label><span>行距</span><select name="lineHeight"><option value="1.5">紧凑 1.5</option><option value="1.7">舒展 1.7</option><option value="1.9">推荐 1.9</option><option value="2.1">宽松 2.1</option></select></label>
+            <label><span>页边距</span><select name="margin"><option value="compact">紧凑</option><option value="standard">标准</option><option value="wide">宽松</option></select></label>
+            <label><span>纸张</span><select name="paper"><option value="rice">米白素笺</option><option value="white">纯白</option><option value="xuan">宣纸浅纹</option></select></label>
+            <label class="export-switch"><input name="showHeader" type="checkbox"><span>显示标题与作者</span></label>
+          </div>
+          <button class="text-button" type="button" data-action="reset-export-layout">恢复通用模板</button>
+        </section>
+        <section class="export-layout-preview-panel" aria-label="稿页预览">
+          <div class="export-preview-toolbar"><button type="button" class="secondary-button" data-action="previous-export-preview">上一页</button><strong data-export-page-label>正在排版…</strong><button type="button" class="secondary-button" data-action="next-export-preview">下一页</button></div>
+          <div id="exportLayoutPreview" class="export-layout-preview" aria-live="polite"></div>
+          <p class="form-message" data-export-message role="status"></p>
+        </section>
+        <footer class="export-workbench-actions"><button class="secondary-button" type="button" data-action="close-export-layout">取消</button><button class="primary-button" type="submit">生成图片</button></footer>
+      </form>
+    </dialog>
+
     <div class="toast-region" aria-live="polite" aria-atomic="true">
       <div class="toast" id="toast" hidden></div>
     </div>

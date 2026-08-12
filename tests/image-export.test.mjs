@@ -2,18 +2,50 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  DEFAULT_EXPORT_LAYOUT,
   EXPORT_HEIGHT,
   EXPORT_WIDTH,
+  applyExportLayout,
   buildExportFileName,
   downloadExportFile,
+  normalizeExportLayout,
   paginateExportUnits,
   shareExportFiles,
   splitExportUnits,
 } from "../js/image-export.mjs";
 
+test("通用素笺模板使用推荐排版参数", () => {
+  assert.deepEqual(DEFAULT_EXPORT_LAYOUT, {
+    version: 1, font: "song", fontSize: 36, alignment: "left",
+    lineHeight: 1.9, margin: "standard", showHeader: true, paper: "rice",
+  });
+});
+
+test("排版设置接受有效值并回退异常字段", () => {
+  assert.deepEqual(normalizeExportLayout({ version: 1, font: "kai", fontSize: 52, alignment: "center", lineHeight: 1.5, margin: "wide", showHeader: false, paper: "xuan" }), { version: 1, font: "kai", fontSize: 52, alignment: "center", lineHeight: 1.5, margin: "wide", showHeader: false, paper: "xuan" });
+  assert.deepEqual(normalizeExportLayout({ version: 9, font: "comic", fontSize: 51, alignment: "justify", lineHeight: 3, margin: "none", showHeader: "false", paper: "photo" }), DEFAULT_EXPORT_LAYOUT);
+});
+
+test("排版设置通过样式变量和语义类应用到稿页", () => {
+  const values = new Map();
+  const page = { classList: { values: new Set(), add(value) { this.values.add(value); }, remove(...items) { items.forEach((item) => this.values.delete(item)); } }, style: { setProperty(name, value) { values.set(name, value); } } };
+  applyExportLayout(page, { font: "fangsong", fontSize: 42, alignment: "right", lineHeight: 1.7, margin: "compact", showHeader: true, paper: "white" });
+  assert.equal(values.get("--export-font-family"), '\"FangSong\", \"STFangsong\", serif');
+  assert.equal(values.get("--export-body-font-size"), "42px");
+  assert.equal(values.get("--export-body-line-height"), "1.7");
+  assert.equal(values.get("--export-page-padding-x"), "72px");
+  assert.equal(values.get("--export-text-align"), "right");
+  assert.equal(page.classList.values.has("export-page--paper-white"), true);
+});
+
 test("导出尺寸固定为手机竖图", () => {
   assert.equal(EXPORT_WIDTH, 1080);
   assert.equal(EXPORT_HEIGHT, 1920);
+});
+
+test("导出模块提供不编码图片的共享页面准备接口", async () => {
+  const exporter = await import("../js/image-export.mjs");
+  assert.equal(typeof exporter.prepareExportPages, "function");
 });
 
 test("诗歌逐行成为不可拆单元并保留空行", () => {

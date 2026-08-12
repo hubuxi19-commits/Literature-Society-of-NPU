@@ -2,9 +2,12 @@ import { config } from "./config.mjs";
 import { createDataService } from "./data-service.mjs";
 import { createRouteCache } from "./route-cache.mjs";
 import {
+  DEFAULT_EXPORT_LAYOUT,
   canShareExportFiles,
   downloadExportFile,
   exportWorkImages,
+  normalizeExportLayout,
+  prepareExportPages,
   shareExportFiles,
 } from "./image-export.mjs";
 import {
@@ -64,8 +67,14 @@ const editorialContent = document.querySelector("#editorialContent");
 const editorialFieldLabel = document.querySelector("#editorialFieldLabel");
 const editorialFormMessage = document.querySelector("[data-editorial-message]");
 const editorialForm = document.querySelector("#editorialForm");
+const exportDialog = document.querySelector("#exportDialog");
+const exportLayoutForm = document.querySelector("#exportLayoutForm");
+const exportLayoutPreview = document.querySelector("#exportLayoutPreview");
+const exportPageLabel = document.querySelector("[data-export-page-label]");
+const exportMessage = document.querySelector("[data-export-message]");
 
 const DRAFT_KEY = "wenyuan-writing-draft";
+const EXPORT_LAYOUT_KEY = "wenyuan-export-layout-v1";
 const PROFILE_RETURN_SENTINEL = "__current-profile__";
 const SWIPE_CLICK_SUPPRESSION_MS = 2000;
 const HOME_SESSION_KEY = "wenyuan-home-session";
@@ -116,6 +125,7 @@ const state = {
   currentWork: null,
   currentProfile: null,
   currentExport: null,
+  exportLayout: { work: null, layout: { ...DEFAULT_EXPORT_LAYOUT }, prepared: null, pageIndex: 0, requestId: 0 },
   editingWork: null,
   filters: {
     query: "",
@@ -948,6 +958,87 @@ function cleanupPreparedExport() {
   const prepared = state.currentExport;
   state.currentExport = null;
   prepared?.previewUrls?.forEach((url) => URL.revokeObjectURL(url));
+}
+
+function readExportLayout() {
+  try { return normalizeExportLayout(JSON.parse(localStorage.getItem(EXPORT_LAYOUT_KEY) || "null")); }
+  catch { return { ...DEFAULT_EXPORT_LAYOUT }; }
+}
+
+function writeExportLayout(layout) {
+  localStorage.setItem(EXPORT_LAYOUT_KEY, JSON.stringify(layout));
+}
+
+function syncExportLayoutForm(layout) {
+  for (const [name, value] of Object.entries(layout)) {
+    const field = exportLayoutForm.elements.namedItem(name);
+    if (field instanceof RadioNodeList) {
+      field.value = String(value);
+    } else if (field instanceof HTMLInputElement && field.type === "checkbox") {
+      field.checked = Boolean(value);
+    } else if (field instanceof HTMLInputElement || field instanceof HTMLSelectElement) {
+      field.value = String(value);
+    }
+  }
+  exportLayoutForm.querySelector("[data-export-font-size]").textContent = `${layout.fontSize}px`;
+}
+
+function collectExportLayout() {
+  const data = new FormData(exportLayoutForm);
+  return normalizeExportLayout({ version: 1, font: data.get("font"), fontSize: Number(data.get("fontSize")), alignment: data.get("alignment"), lineHeight: Number(data.get("lineHeight")), margin: data.get("margin"), showHeader: data.get("showHeader") === "on", paper: data.get("paper") });
+}
+
+function cleanupExportLayoutPreview() {
+  state.exportLayout.requestId += 1;
+  state.exportLayout.prepared?.cleanup();
+  state.exportLayout.prepared = null;
+  exportLayoutPreview.replaceChildren();
+}
+
+function showExportPreviewPage() {
+  const pages = state.exportLayout.prepared?.pages ?? [];
+  const count = pages.length;
+  state.exportLayout.pageIndex = Math.max(0, Math.min(state.exportLayout.pageIndex, count - 1));
+  exportPageLabel.textContent = count ? `第 ${state.exportLayout.pageIndex + 1} / ${count} 页` : "正在排版…";
+  exportLayoutPreview.replaceChildren();
+  if (!count) return;
+  const frame = element("div", { className: "export-preview-frame" });
+  frame.append(pages[state.exportLayout.pageIndex].cloneNode(true));
+  exportLayoutPreview.append(frame);
+  exportLayoutForm.querySelector('[data-action="previous-export-preview"]').disabled = state.exportLayout.pageIndex === 0;
+  exportLayoutForm.querySelector('[data-action="next-export-preview"]').disabled = state.exportLayout.pageIndex >= count - 1;
+}
+
+async function refreshExportLayoutPreview() {
+  const requestId = ++state.exportLayout.requestId;
+  state.exportLayout.prepared?.cleanup();
+  state.exportLayout.prepared = null;
+  exportMessage.textContent = "正在按新设置整理稿页…";
+  try {
+    const prepared = await prepareExportPages(state.exportLayout.work, { layout: state.exportLayout.layout });
+    if (requestId !== state.exportLayout.requestId || !exportDialog.open) { prepared.cleanup(); return; }
+    state.exportLayout.prepared = prepared;
+    state.exportLayout.pageIndex = Math.min(state.exportLayout.pageIndex, prepared.pages.length - 1);
+    showExportPreviewPage();
+    exportMessage.textContent = `预计生成 ${prepared.pages.length} 张图片`;
+  } catch (error) {
+    if (requestId === state.exportLayout.requestId) exportMessage.textContent = error.message;
+  }
+}
+
+function openExportLayout(work) {
+  cleanupPreparedExport();
+  document.querySelector(".export-results-host")?.replaceChildren();
+  state.exportLayout.work = work;
+  state.exportLayout.layout = readExportLayout();
+  state.exportLayout.pageIndex = 0;
+  syncExportLayoutForm(state.exportLayout.layout);
+  exportDialog.showModal();
+  void refreshExportLayoutPreview();
+}
+
+function closeExportLayout() {
+  if (exportDialog.open) exportDialog.close();
 }
 
 function renderExportActions(prepared, container) {
@@ -4322,51 +4413,18 @@ document.addEventListener("click", async (event) => {
       showToast("作品内容已经变化，请刷新后重试。");
       return;
     }
-
-    const originalText = trigger.textContent;
-    trigger.disabled = true;
-    trigger.textContent = "正在生成…";
-    const resultsContainer = document.querySelector(".export-results-host");
-    cleanupPreparedExport();
-    resultsContainer?.replaceChildren();
-
-    try {
-      const result = await exportWorkImages(work);
-      const route = parseRoute(window.location.hash);
-      if (
-        state.currentWork !== work ||
-        route.name !== "work" ||
-        String(route.id) !== String(work.id)
-      ) {
-        return;
-      }
-      const prepared = {
-        work,
-        workId: String(work.id),
-        blobs: result.blobs,
-        files: result.files,
-        previewUrls: [],
-      };
-      state.currentExport = prepared;
-      try {
-        prepared.files.forEach((file) => {
-          prepared.previewUrls.push(URL.createObjectURL(file));
-        });
-        renderExportActions(prepared, resultsContainer);
-      } catch (error) {
-        cleanupPreparedExport();
-        throw error;
-      }
-      showToast(
-        `已生成 ${result.blobs.length} 页，请点击分享或保存。`,
-        "success",
-      );
-    } catch (error) {
-      showToast(`作品图片没有生成：${error.message}`);
-    } finally {
-      trigger.disabled = false;
-      trigger.textContent = originalText;
-    }
+    openExportLayout(work);
+  } else if (action === "close-export-layout") {
+    closeExportLayout();
+  } else if (action === "reset-export-layout") {
+    state.exportLayout.layout = { ...DEFAULT_EXPORT_LAYOUT };
+    state.exportLayout.pageIndex = 0;
+    syncExportLayoutForm(state.exportLayout.layout);
+    writeExportLayout(state.exportLayout.layout);
+    void refreshExportLayoutPreview();
+  } else if (action === "previous-export-preview" || action === "next-export-preview") {
+    state.exportLayout.pageIndex += action === "next-export-preview" ? 1 : -1;
+    showExportPreviewPage();
   } else if (action === "share-export") {
     const prepared = getPreparedExport(trigger);
     if (!prepared) return;
@@ -4583,7 +4641,26 @@ document.addEventListener("submit", async (event) => {
   const form = event.target;
   if (!(form instanceof HTMLFormElement)) return;
 
-  if (form.id === "loginForm") {
+  if (form.id === "exportLayoutForm") {
+    event.preventDefault();
+    const work = state.exportLayout.work;
+    const submit = form.querySelector('[type="submit"]');
+    if (!work || String(work.id) !== String(state.currentWork?.id)) { exportMessage.textContent = "作品内容已经变化，请关闭后重试。"; return; }
+    submit.disabled = true;
+    submit.textContent = "正在生成…";
+    cleanupPreparedExport();
+    try {
+      const layout = state.exportLayout.layout;
+      const result = await exportWorkImages(work, { layout });
+      const prepared = { work, workId: String(work.id), blobs: result.blobs, files: result.files, previewUrls: [] };
+      state.currentExport = prepared;
+      prepared.files.forEach((file) => prepared.previewUrls.push(URL.createObjectURL(file)));
+      renderExportActions(prepared, document.querySelector(".export-results-host"));
+      closeExportLayout();
+      showToast(`已生成 ${result.blobs.length} 页，请点击分享或保存。`, "success");
+    } catch (error) { exportMessage.textContent = `作品图片没有生成：${error.message}`; }
+    finally { submit.disabled = false; submit.textContent = "生成图片"; }
+  } else if (form.id === "loginForm") {
     event.preventDefault();
     await handleAuthSubmit(form, "login");
   } else if (form.id === "registerForm") {
@@ -4830,6 +4907,16 @@ document.addEventListener("submit", async (event) => {
 
 document.addEventListener("change", (event) => {
   const target = event.target;
+  if (target.form?.id === "exportLayoutForm") {
+    state.exportLayout.layout = collectExportLayout();
+    state.exportLayout.pageIndex = 0;
+    syncExportLayoutForm(state.exportLayout.layout);
+    writeExportLayout(state.exportLayout.layout);
+    cleanupPreparedExport();
+    document.querySelector(".export-results-host")?.replaceChildren();
+    void refreshExportLayoutPreview();
+    return;
+  }
   if (!(target instanceof HTMLSelectElement)) return;
   if (target.form?.id === "homeFilters") {
     if (target.name === "category") setFilters({ category: target.value });
@@ -4840,6 +4927,16 @@ document.addEventListener("change", (event) => {
 document.addEventListener("input", (event) => {
   const target = event.target;
   if (!(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement)) {
+    return;
+  }
+  if (target.form?.id === "exportLayoutForm") {
+    exportLayoutForm.querySelector("[data-export-font-size]").textContent = `${target.value}px`;
+    clearTimeout(window.__exportLayoutTimer);
+    window.__exportLayoutTimer = setTimeout(() => {
+      state.exportLayout.layout = collectExportLayout(); state.exportLayout.pageIndex = 0;
+      writeExportLayout(state.exportLayout.layout); cleanupPreparedExport();
+      document.querySelector(".export-results-host")?.replaceChildren(); void refreshExportLayoutPreview();
+    }, 120);
     return;
   }
   if (target.form?.id === "writingForm") {
@@ -4881,6 +4978,10 @@ recoveryDialog.addEventListener("close", () => {
 confirmDialog.addEventListener("cancel", (event) => {
   event.preventDefault();
   finishConfirmation(false);
+});
+
+exportDialog.addEventListener("close", () => {
+  cleanupExportLayoutPreview(); state.exportLayout.work = null; exportMessage.textContent = "";
 });
 
 window.addEventListener("hashchange", renderCurrentRoute);

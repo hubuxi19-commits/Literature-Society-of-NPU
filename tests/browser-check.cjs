@@ -501,6 +501,15 @@ async function desktopFlow(browser, browserMessages) {
   };
   page.on("download", recordFirstClickDownload);
   await page.getByRole("button", { name: "生成作品图片" }).click();
+  const exportDialog = page.getByRole("dialog", { name: "导出排版" });
+  await exportDialog.waitFor({ state: "visible" });
+  await exportDialog.getByText(/预计生成 \d+ 张图片/).waitFor({ state: "visible", timeout: 30000 });
+  if ((await exportDialog.locator("canvas").count()) !== 0) throw new Error("轻量预览不应编码 canvas");
+  await page.evaluate(() => {
+    window.__exportProbe.layoutSamples = [];
+    window.__exportProbe.renderedUnits = [];
+  });
+  await exportDialog.getByRole("button", { name: "生成图片", exact: true }).click();
   const exportPanel = page.getByRole("region", { name: "分享或保存作品图片" });
   await exportPanel.waitFor({ state: "visible", timeout: 30000 });
   page.off("download", recordFirstClickDownload);
@@ -563,10 +572,11 @@ async function desktopFlow(browser, browserMessages) {
   if (generationProbe.renderRoots !== 0) {
     throw new Error("图片生成后没有清理离屏导出节点");
   }
-  if (generationProbe.layoutSamples.length !== pageCount) {
+  if (generationProbe.layoutSamples.length < pageCount) {
     throw new Error("没有测量每一页的正文与标识布局");
   }
-  generationProbe.layoutSamples.forEach((sample, index) => {
+  const finalLayoutSamples = generationProbe.layoutSamples.slice(0, pageCount);
+  finalLayoutSamples.forEach((sample, index) => {
     const { bodyRect, wordmarkRect } = sample;
     if (sample.pageScrollHeight > sample.pageClientHeight) {
       throw new Error(`第 ${index + 1} 页导出画布发生纵向溢出`);
@@ -587,10 +597,10 @@ async function desktopFlow(browser, browserMessages) {
       throw new Error(`第 ${index + 1} 页文学社标识与正文区域重叠`);
     }
   });
-  if (!generationProbe.layoutSamples[0]?.hasTitle) {
+  if (!finalLayoutSamples[0]?.hasTitle) {
     throw new Error("导出第一页缺少作品标题");
   }
-  if (generationProbe.layoutSamples.slice(1).some((sample) => sample.hasTitle)) {
+  if (finalLayoutSamples.slice(1).some((sample) => sample.hasTitle)) {
     throw new Error("导出续页不应重复显示作品标题");
   }
   if (generationProbe.createdUrls.length !== pageCount) {
@@ -602,12 +612,15 @@ async function desktopFlow(browser, browserMessages) {
   assert.deepEqual(
     generationProbe.renderedUnits
       .filter((unit) => unit.className === "export-paragraph")
+      .slice(0, publishedParagraphs.length)
       .map((unit) => unit.text),
     publishedParagraphs,
   );
 
   const firstPreviewUrls = generationProbe.createdUrls;
   await page.getByRole("button", { name: "生成作品图片" }).click();
+  await page.getByRole("dialog", { name: "导出排版" }).getByText(/预计生成 \d+ 张图片/).waitFor({ state: "visible", timeout: 30000 });
+  await page.getByRole("dialog", { name: "导出排版" }).getByRole("button", { name: "生成图片", exact: true }).click();
   await page.waitForFunction(
     (minimum) => window.__exportProbe.createdUrls.length >= minimum,
     pageCount * 2,

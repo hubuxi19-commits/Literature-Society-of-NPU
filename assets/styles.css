@@ -1016,6 +1016,35 @@ main {
   text-align: center;
 }
 
+.export-layout-dialog { width: min(calc(100% - 2rem), 1080px); max-height: min(900px, calc(100dvh - 2rem)); overflow: hidden; border-color: var(--rule-dark); }
+.export-workbench { display: grid; grid-template-columns: minmax(280px, .78fr) minmax(360px, 1.22fr); grid-template-rows: auto minmax(0, 1fr) auto; max-height: calc(100dvh - 2rem); }
+.export-workbench-head, .export-workbench-actions { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1.2rem 1.4rem; border-bottom: 1px solid var(--rule); }
+.export-workbench-head h2 { margin: 0; font-family: var(--serif-title); font-size: 1.8rem; }
+.export-workbench-head .eyebrow { margin: 0 0 .25rem; }
+.export-layout-controls { overflow-y: auto; padding: 1.4rem; border-right: 1px solid var(--rule); }
+.export-template-note { margin: 0 0 1.2rem; padding: .8rem 1rem; border-left: 3px solid var(--vermilion); background: rgb(140 47 43 / 6%); color: var(--soft-ink); font-size: .82rem; }
+.export-control-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+.export-control-grid label, .export-control-grid fieldset { display: grid; gap: .45rem; min-width: 0; margin: 0; }
+.export-control-grid fieldset { grid-column: 1 / -1; padding: 0; border: 0; }
+.export-control-grid span, .export-control-grid legend { color: var(--soft-ink); font-family: var(--utility); font-size: .74rem; }
+.export-control-grid select, .export-control-grid input[type="range"] { width: 100%; min-height: 44px; }
+.export-segmented { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid var(--rule-dark); }
+.export-segmented label { position: relative; display: block; }
+.export-segmented input { position: absolute; opacity: 0; }
+.export-segmented span { display: grid; min-height: 44px; place-items: center; border-right: 1px solid var(--rule); color: var(--ink); cursor: pointer; }
+.export-segmented label:last-child span { border-right: 0; }
+.export-segmented input:checked + span { background: var(--vermilion); color: var(--paper-light); }
+.export-switch { grid-column: 1 / -1; grid-template-columns: auto 1fr; align-items: center; min-height: 44px; }
+.export-switch input { width: 1.15rem; height: 1.15rem; accent-color: var(--vermilion); }
+.export-layout-preview-panel { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; min-height: 0; padding: 1.4rem; background: #ded8cd; }
+.export-preview-toolbar { display: flex; align-items: center; justify-content: space-between; gap: .8rem; margin-bottom: 1rem; }
+.export-preview-toolbar .secondary-button { min-height: 44px; padding: .55rem .8rem; }
+.export-layout-preview { display: grid; min-height: 360px; overflow: hidden; place-items: center; }
+.export-preview-frame { position: relative; width: min(100%, 330px); aspect-ratio: 1080 / 1920; overflow: hidden; background: white; box-shadow: 0 20px 55px rgb(36 27 18 / 22%); }
+.export-preview-frame > .export-page { position: absolute; top: 0; left: 0; transform: scale(var(--export-preview-scale, .3055556)); transform-origin: top left; }
+.export-workbench-actions { justify-content: flex-end; border-top: 1px solid var(--rule); border-bottom: 0; background: var(--paper-light); }
+.export-workbench-actions button { min-height: 44px; }
+
 /* “素笺”导出稿页固定使用 CSS 像素，必须置于响应式规则之外。 */
 .export-render-root {
   position: fixed;
@@ -1033,12 +1062,16 @@ main {
   box-sizing: border-box;
   width: 1080px;
   height: 1920px;
-  padding: 112px 96px 0;
+  padding: 112px var(--export-page-padding-x, 96px) 0;
   overflow: visible;
   background: #f3eee3;
   color: #24211d;
-  font-family: "Noto Serif SC", "Songti SC", SimSun, serif;
+  font-family: var(--export-font-family, "Noto Serif SC", "Songti SC", SimSun, serif);
 }
+
+.export-page--paper-white { background: #fff; }
+.export-page--paper-xuan { background-color: #f2eee2; background-image: radial-gradient(rgb(111 91 63 / 8%) .7px, transparent .8px), linear-gradient(105deg, transparent 48%, rgb(135 111 77 / 4%) 49%, transparent 51%); background-size: 11px 13px, 83px 97px; }
+.export-page--hide-author .export-author-date { visibility: hidden; }
 
 .export-page--continuation {
   grid-template-rows: minmax(0, 1fr) 400px;
@@ -1056,8 +1089,9 @@ main {
 .export-body {
   min-height: 0;
   overflow: visible;
-  font-size: 38px;
-  line-height: 1.9;
+  font-size: var(--export-body-font-size, 38px);
+  line-height: var(--export-body-line-height, 1.9);
+  text-align: var(--export-text-align, left);
   overflow-wrap: anywhere;
 }
 
@@ -1076,7 +1110,7 @@ main {
 
 .export-paragraph {
   padding-bottom: 28px;
-  text-align: justify;
+  text-align: var(--export-text-align, justify);
   text-indent: 2em;
   white-space: pre-wrap;
 }
@@ -2883,7 +2917,17 @@ main {
     padding: 0.55rem 0.5rem;
   }
 
-@media (max-width: 430px) {
+@media (max-width: 760px) {
+  .export-layout-dialog { width: 100%; max-width: none; max-height: 100dvh; margin: 0; border-right: 0; border-left: 0; }
+  .export-workbench { grid-template-columns: 1fr; grid-template-rows: auto auto minmax(420px, 1fr) auto; max-height: 100dvh; overflow-y: auto; }
+  .export-workbench-head, .export-workbench-actions { grid-column: 1; padding: 1rem; }
+  .export-layout-controls { overflow: visible; padding: 1rem; border-right: 0; border-bottom: 1px solid var(--rule); }
+  .export-control-grid { grid-template-columns: 1fr 1fr; gap: .9rem; }
+  .export-layout-preview-panel { min-height: 520px; padding: 1rem; }
+  .export-layout-preview { min-height: 400px; }
+  .export-preview-frame { width: min(100%, 244px); }
+  .export-preview-frame > .export-page { --export-preview-scale: .2259259; }
+  .export-workbench-actions { position: sticky; bottom: 0; z-index: 2; padding-bottom: max(1rem, env(safe-area-inset-bottom)); }
   .mobile-feed-masthead {
     padding: 1rem 0.9rem 0.8rem;
   }
