@@ -100,7 +100,7 @@ function createDemoService(config = {}) {
       !security ||
       (security.state !== "verified" && security.state !== "changing")
     ) {
-      throw new Error("请先验证找回邮箱");
+      throw new Error("请先验证找回邮箱后再进行此操作");
     }
     return current;
   };

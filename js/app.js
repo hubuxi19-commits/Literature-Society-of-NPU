@@ -77,6 +77,7 @@ const state = {
   works: [],
   settings: null,
   currentWork: null,
+  currentProfile: null,
   currentExport: null,
   editingWork: null,
   filters: {
@@ -1779,7 +1780,9 @@ function reportTargetLabel(targetType, targetId) {
   if (targetType === "comment") {
     return "评论";
   }
-  const profile = state.profiles?.find?.((p) => p.id === targetId);
+  const profile = state.currentProfile?.id === targetId
+    ? state.currentProfile
+    : null;
   return `用户：${profile?.pen_name ?? "未知"}`;
 }
 
@@ -2773,6 +2776,7 @@ async function renderAuthor(profileId) {
       service.getProfile(profileId),
       service.getProfileSocialCounts(profileId),
     ]);
+    state.currentProfile = profile;
     if (state.session?.profile.id === profile.id) {
       Object.assign(state.session.profile, {
         pen_name: profile.pen_name,
