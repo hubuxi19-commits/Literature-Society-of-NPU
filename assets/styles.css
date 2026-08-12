@@ -1984,6 +1984,17 @@ main {
   }
 }
 
+@media (max-width: 1099px) and (min-width: 761px) {
+  /* 中等宽度电脑采用上下工作台，避免设置与稿页在双栏内互相挤压。 */
+  .export-layout-dialog { width: min(calc(100% - 2rem), 960px); overflow-x: hidden; overflow-y: auto; }
+  .export-workbench { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto minmax(540px, 1fr) auto; overflow-x: hidden; overflow-y: auto; }
+  .export-workbench-head, .export-workbench-actions { grid-column: 1; }
+  .export-layout-controls { overflow: visible; border-right: 0; border-bottom: 1px solid var(--rule); }
+  .export-control-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .export-layout-preview-panel { min-height: 540px; }
+  .export-workbench-actions { position: sticky; bottom: 0; z-index: 2; }
+}
+
 @media (max-width: 980px) {
   .header-inner {
     grid-template-columns: 1fr auto;

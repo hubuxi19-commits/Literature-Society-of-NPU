@@ -731,6 +731,37 @@ async function desktopFlow(browser, browserMessages) {
   return { homeScreenshot, readingScreenshot };
 }
 
+async function exportWorkbenchResponsiveFlow(browser, browserMessages) {
+  const context = await browser.newContext({ viewport: { width: 920, height: 900 } });
+  const page = await context.newPage();
+  await useDemoConfig(page);
+  page.on("pageerror", (error) => browserMessages.push(`responsive export pageerror: ${error.message}`));
+  await page.goto(baseUrl);
+  await page.waitForLoadState("networkidle");
+  await goToHash(page, "#/works/work-night-bus", "末班车经过友谊校区");
+  await page.getByRole("button", { name: "生成作品图片" }).click();
+  const dialog = page.getByRole("dialog", { name: "导出排版" });
+  await dialog.waitFor({ state: "visible" });
+  async function readLayout(width) {
+    await page.setViewportSize({ width, height: 900 });
+    return dialog.evaluate((node) => {
+      const workbench = node.querySelector(".export-workbench");
+      const controlsRect = node.querySelector(".export-layout-controls").getBoundingClientRect();
+      const previewRect = node.querySelector(".export-layout-preview-panel").getBoundingClientRect();
+      const actionsRect = node.querySelector(".export-workbench-actions").getBoundingClientRect();
+      return { stacked: previewRect.top >= controlsRect.bottom - 1, horizontalOverflow: node.scrollWidth > node.clientWidth || workbench.scrollWidth > workbench.clientWidth, actionsVisible: actionsRect.top >= 0 && actionsRect.bottom <= innerHeight + 1 };
+    });
+  }
+  for (const width of [920, 1024]) {
+    const layout = await readLayout(width);
+    if (!layout.stacked) throw new Error(`${width}px 导出工作台没有切换为上下布局`);
+    if (layout.horizontalOverflow) throw new Error(`${width}px 导出工作台出现横向溢出`);
+    if (!layout.actionsVisible) throw new Error(`${width}px 导出工作台操作栏不可见`);
+  }
+  if ((await readLayout(1440)).stacked) throw new Error("1440px 导出工作台不应切换为上下布局");
+  await context.close();
+}
+
 async function mobileFlow(browser, browserMessages) {
   const context = await browser.newContext({
     viewport: { width: 390, height: 844 },
@@ -1558,6 +1589,7 @@ async function governanceFlow(browser, browserMessages) {
   });
   try {
     const desktopScreenshots = await desktopFlow(browser, browserMessages);
+    await exportWorkbenchResponsiveFlow(browser, browserMessages);
     const mobileScreenshots = await mobileFlow(browser, browserMessages);
     await mobileProfileAuthFlow(browser, browserMessages);
     await accountSecurityFlow(browser, browserMessages);
