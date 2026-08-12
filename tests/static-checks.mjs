@@ -604,6 +604,9 @@ test("普通阅读与作者导航保留现有页面并延后非首屏请求", as
   const workRoute = app.slice(workStart, workEnd);
   const authorRoute = app.slice(authorStart, authorEnd);
   const initializeBody = app.slice(initializeStart, initializeEnd);
+  const mediaChangeStart = app.indexOf('mobileHomeMedia.addEventListener("change"');
+  const mediaChangeEnd = app.indexOf("if (!window.location.hash)", mediaChangeStart);
+  const mediaChangeBody = app.slice(mediaChangeStart, mediaChangeEnd);
 
   assert.ok(workStart >= 0, "缺少作品路由");
   assert.ok(authorStart >= 0, "缺少作者路由");
@@ -616,6 +619,33 @@ test("普通阅读与作者导航保留现有页面并延后非首屏请求", as
     initializeBody,
     /await\s+loadDiscussionsPage\(\{\s*reset:\s*true\s*\}\)/,
   );
+  assert.doesNotMatch(
+    initializeBody,
+    /service\.listWorks\(\)/,
+    "首页冷启动不得与分页接口并行请求全量作品",
+  );
+  assert.match(
+    initializeBody,
+    /backgroundState[\s\S]*?\.then\([\s\S]*?state\.session\s*=\s*session[\s\S]*?state\.settings\s*=\s*settings/,
+    "后台会话与站点设置必须在正常路径写回状态",
+  );
+  assert.equal(
+    (app.match(/document\.addEventListener\("pointerdown",[\s\S]*?prefetchRouteTarget/g) ?? []).length,
+    1,
+  );
+  assert.doesNotMatch(
+    mediaChangeBody,
+    /document\.addEventListener\("pointerdown"/,
+    "作品预取监听器不得依赖移动端断点发生变化后才注册",
+  );
+  assert.match(
+    workRoute,
+    /state\.works\.length\s*\?\s*state\.works\s*:\s*state\.browse\.works/,
+    "作品页相关推荐应复用已加载的分页作品",
+  );
+  const adminLoader = app.match(/async function loadAdminData\(\)[\s\S]*?\n}\n/)?.[0] ?? "";
+  assert.match(adminLoader, /service\.listWorks\(\)/, "全量作品只在管理台按需加载");
+  assert.match(adminLoader, /state\.works\s*=\s*works/);
 });
 
 

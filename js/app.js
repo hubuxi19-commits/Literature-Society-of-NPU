@@ -2213,7 +2213,8 @@ async function renderWork(workId, { refresh = false } = {}) {
     commentsBlock.append(commentTree);
     window.__workHighlights = null;
 
-    const related = state.works
+    const relatedSource = state.works.length ? state.works : state.browse.works;
+    const related = relatedSource
       .filter(
         (item) =>
           item.id !== work.id &&
@@ -3429,11 +3430,12 @@ async function loadAdminData() {
   const requestId = ++state.admin.requestId;
   state.admin.loading = true;
   try {
-    const [pending, resolved, dismissed, actions] = await Promise.all([
+    const [pending, resolved, dismissed, actions, works] = await Promise.all([
       service.listReports("pending"),
       service.listReports("resolved"),
       service.listReports("dismissed"),
       service.listModerationActions(),
+      state.works.length ? Promise.resolve(state.works) : service.listWorks(),
     ]);
     if (requestId !== state.admin.requestId) return;
     state.admin.reports = [
@@ -3442,6 +3444,7 @@ async function loadAdminData() {
       ...dismissed.reports.map((r) => ({ ...r, status: "dismissed" })),
     ];
     state.admin.actions = actions.actions;
+    state.works = works;
     state.admin.loading = false;
     if (parseRoute(window.location.hash).name === "admin") {
       renderAdminConsole();
@@ -3998,22 +4001,22 @@ async function initialize() {
     const backgroundState = Promise.all([
       service.getSession(),
       service.getSiteSettings(),
-      service.listWorks(),
     ]);
-    if (!saved) await loadBrowseWorks({ reset: true });
-    await renderCurrentRoute();
-  } catch (error) {
     void backgroundState
-      .then(([session, settings, works]) => {
+      .then(([session, settings]) => {
         state.session = session;
         state.settings = settings;
-        state.works = works;
         updateHeader();
         refreshNotificationBadge();
+        const route = parseRoute(window.location.hash);
+        if (route.name === "home") renderHome();
+        if (route.name === "submissions") renderSubmissions();
       })
       .catch((error) => showToast(`部分资料稍后重试：${error.message}`, "error"));
+    if (!saved) await loadBrowseWorks({ reset: true });
+    await renderCurrentRoute();
     void loadDiscussionsPage({ reset: true });
-
+  } catch (error) {
     showError(
       "社区暂时无法加载",
       `${error.message}。请检查网络或 Supabase 配置后重试。`,
@@ -4881,10 +4884,11 @@ confirmDialog.addEventListener("cancel", (event) => {
 });
 
 window.addEventListener("hashchange", renderCurrentRoute);
+document.addEventListener("pointerdown", (event) => prefetchRouteTarget(event.target), {
+  passive: true,
+});
 
 mobileHomeMedia.addEventListener("change", () => {
-document.addEventListener("pointerdown", (event) => prefetchRouteTarget(event.target), { passive: true });
-
   const route = parseRoute(window.location.hash);
   if (route.name === "home") renderHome();
 });
