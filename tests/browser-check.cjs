@@ -768,6 +768,37 @@ async function exportWorkbenchResponsiveFlow(browser, browserMessages) {
   await context.close();
 }
 
+async function desktopHeroTitleFlow(browser, browserMessages) {
+  const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+  const page = await context.newPage();
+  await useDemoConfig(page);
+  page.on("pageerror", (error) => browserMessages.push(`desktop hero pageerror: ${error.message}`));
+  await page.goto(baseUrl);
+  await page.waitForLoadState("networkidle");
+  const title = page.getByRole("heading", { name: "让作品被读见" });
+  await title.waitFor();
+  const layout = await title.evaluate((node) => {
+    const plainText = node.firstChild;
+    const accentText = node.querySelector("em").firstChild;
+    const plainRange = document.createRange();
+    const accentRange = document.createRange();
+    plainRange.setStart(plainText, plainText.length - 1);
+    plainRange.setEnd(plainText, plainText.length);
+    accentRange.setStart(accentText, accentText.length - 1);
+    accentRange.setEnd(accentText, accentText.length);
+    const plainRect = plainRange.getBoundingClientRect();
+    const accentRect = accentRange.getBoundingClientRect();
+    return {
+      plainTop: plainRect.top,
+      accentTop: accentRect.top,
+    };
+  });
+  if (Math.abs(layout.accentTop - layout.plainTop) > 2) {
+    throw new Error(`桌面首页标题发生换行：${JSON.stringify(layout)}`);
+  }
+  await context.close();
+}
+
 async function mobileFlow(browser, browserMessages) {
   const context = await browser.newContext({
     viewport: { width: 390, height: 844 },
@@ -1595,6 +1626,7 @@ async function governanceFlow(browser, browserMessages) {
   });
   try {
     const desktopScreenshots = await desktopFlow(browser, browserMessages);
+    await desktopHeroTitleFlow(browser, browserMessages);
     await exportWorkbenchResponsiveFlow(browser, browserMessages);
     const mobileScreenshots = await mobileFlow(browser, browserMessages);
     await mobileProfileAuthFlow(browser, browserMessages);

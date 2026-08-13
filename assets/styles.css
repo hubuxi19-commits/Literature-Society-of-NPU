@@ -389,13 +389,14 @@ main {
 }
 
 .hero h1 {
-  max-width: 10ch;
+  max-width: none;
   margin: 0;
   font-family: var(--serif-title);
   font-size: clamp(3.3rem, 7.4vw, 7.2rem);
   font-weight: 700;
   letter-spacing: -0.065em;
   line-height: 0.98;
+  white-space: nowrap;
 }
 
 .hero h1 em {
