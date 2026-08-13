@@ -431,7 +431,7 @@ main {
 
 .editorial-note {
   display: grid;
-  grid-template-columns: 150px minmax(0, 1fr);
+  grid-template-columns: max-content minmax(0, 1fr);
   gap: 3rem;
   padding: 2.3rem 0;
   border-bottom: 1px solid var(--rule);
@@ -447,9 +447,14 @@ main {
 }
 
 .editorial-note p:last-child {
+  min-width: 0;
   max-width: 62ch;
   margin: 0;
   color: var(--soft-ink);
+}
+
+.editorial-note h2 {
+  white-space: nowrap;
 }
 
 .lead-grid {
@@ -2129,6 +2134,10 @@ main {
   .editorial-note {
     grid-template-columns: 1fr;
     gap: 0.7rem;
+  }
+
+  .editorial-note h2 {
+    white-space: normal;
   }
 
   .lead-grid {

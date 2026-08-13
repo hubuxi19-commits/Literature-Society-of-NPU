@@ -796,6 +796,23 @@ async function desktopHeroTitleFlow(browser, browserMessages) {
   if (Math.abs(layout.accentTop - layout.plainTop) > 2) {
     throw new Error(`桌面首页标题发生换行：${JSON.stringify(layout)}`);
   }
+  const editorialTitle = page.getByRole("heading", { name: "把写下的交给彼此" });
+  const editorialLayout = await editorialTitle.evaluate((node) => {
+    const text = node.firstChild;
+    const firstRange = document.createRange();
+    const lastRange = document.createRange();
+    firstRange.setStart(text, 0);
+    firstRange.setEnd(text, 1);
+    lastRange.setStart(text, text.length - 1);
+    lastRange.setEnd(text, text.length);
+    return {
+      firstTop: firstRange.getBoundingClientRect().top,
+      lastTop: lastRange.getBoundingClientRect().top,
+    };
+  });
+  if (Math.abs(editorialLayout.lastTop - editorialLayout.firstTop) > 2) {
+    throw new Error(`编辑部短消息标题发生换行：${JSON.stringify(editorialLayout)}`);
+  }
   await context.close();
 }
 
