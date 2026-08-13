@@ -1017,6 +1017,10 @@ main {
 }
 
 .export-layout-dialog { width: min(calc(100% - 2rem), 1080px); max-height: min(900px, calc(100dvh - 2rem)); overflow: hidden; border-color: var(--rule-dark); }
+.export-scroll-shell { width: 100%; max-height: min(900px, calc(100dvh - 2rem)); overflow: auto; scrollbar-color: #8f8b85 #e8e2d8; scrollbar-width: auto; scrollbar-gutter: stable; }
+.export-scroll-shell::-webkit-scrollbar { width: 12px; height: 12px; }
+.export-scroll-shell::-webkit-scrollbar-track { background: #e8e2d8; }
+.export-scroll-shell::-webkit-scrollbar-thumb { border: 3px solid #e8e2d8; border-radius: 999px; background: #8f8b85; }
 .export-workbench { display: grid; grid-template-columns: minmax(280px, .78fr) minmax(360px, 1.22fr); grid-template-rows: auto minmax(0, 1fr) auto; max-height: calc(100dvh - 2rem); }
 .export-workbench-head, .export-workbench-actions { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1.2rem 1.4rem; border-bottom: 1px solid var(--rule); }
 .export-workbench-head h2 { margin: 0; font-family: var(--serif-title); font-size: 1.8rem; }
@@ -1986,8 +1990,9 @@ main {
 
 @media (max-width: 1099px) and (min-width: 761px) {
   /* 中等宽度电脑采用上下工作台，避免设置与稿页在双栏内互相挤压。 */
-  .export-layout-dialog { width: min(calc(100% - 2rem), 960px); overflow-x: hidden; overflow-y: auto; }
-  .export-workbench { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto minmax(540px, 1fr) auto; overflow-x: hidden; overflow-y: auto; }
+  .export-layout-dialog { box-sizing: border-box; width: calc(100% - 2rem); max-width: 960px; overflow: hidden; }
+  .export-scroll-shell { overflow-x: scroll; overflow-y: auto; }
+  .export-workbench { width: 960px; min-width: 960px; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto minmax(540px, 1fr) auto; overflow: visible; }
   .export-workbench-head, .export-workbench-actions { grid-column: 1; }
   .export-layout-controls { overflow: visible; border-right: 0; border-bottom: 1px solid var(--rule); }
   .export-control-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -2929,8 +2934,9 @@ main {
   }
 
 @media (max-width: 760px) {
-  .export-layout-dialog { width: 100%; max-width: none; max-height: 100dvh; margin: 0; border-right: 0; border-left: 0; }
-  .export-workbench { grid-template-columns: 1fr; grid-template-rows: auto auto minmax(420px, 1fr) auto; max-height: 100dvh; overflow-y: auto; }
+  .export-layout-dialog { width: 100%; max-width: none; max-height: 100dvh; margin: 0; overflow: hidden; border-right: 0; border-left: 0; }
+  .export-scroll-shell { max-height: 100dvh; overflow-x: hidden; overflow-y: auto; scrollbar-gutter: auto; }
+  .export-workbench { min-width: 0; grid-template-columns: 1fr; grid-template-rows: auto auto minmax(420px, 1fr) auto; max-height: 100dvh; overflow-x: hidden; overflow-y: auto; }
   .export-workbench-head, .export-workbench-actions { grid-column: 1; padding: 1rem; }
   .export-layout-controls { overflow: visible; padding: 1rem; border-right: 0; border-bottom: 1px solid var(--rule); }
   .export-control-grid { grid-template-columns: 1fr 1fr; gap: .9rem; }

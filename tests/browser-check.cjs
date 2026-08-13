@@ -745,17 +745,23 @@ async function exportWorkbenchResponsiveFlow(browser, browserMessages) {
   async function readLayout(width) {
     await page.setViewportSize({ width, height: 900 });
     return dialog.evaluate((node) => {
+      const scrollShell = node.querySelector(".export-scroll-shell");
       const workbench = node.querySelector(".export-workbench");
       const controlsRect = node.querySelector(".export-layout-controls").getBoundingClientRect();
       const previewRect = node.querySelector(".export-layout-preview-panel").getBoundingClientRect();
       const actionsRect = node.querySelector(".export-workbench-actions").getBoundingClientRect();
-      return { stacked: previewRect.top >= controlsRect.bottom - 1, horizontalOverflow: node.scrollWidth > node.clientWidth || workbench.scrollWidth > workbench.clientWidth, actionsVisible: actionsRect.top >= 0 && actionsRect.bottom <= innerHeight + 1 };
+      const start = scrollShell.scrollLeft;
+      scrollShell.scrollLeft = 160;
+      const moved = scrollShell.scrollLeft > start;
+      scrollShell.scrollLeft = start;
+      return { stacked: previewRect.top >= controlsRect.bottom - 1, horizontalOverflow: scrollShell.scrollWidth > scrollShell.clientWidth, horizontalOverflowStyle: getComputedStyle(scrollShell).overflowX, horizontalScrollMoved: moved, dialogClientWidth: node.clientWidth, dialogScrollWidth: node.scrollWidth, workbenchClientWidth: workbench.clientWidth, workbenchScrollWidth: workbench.scrollWidth, workbenchWidth: getComputedStyle(workbench).width, actionsVisible: actionsRect.top >= 0 && actionsRect.bottom <= innerHeight + 1 };
     });
   }
   for (const width of [920, 1024]) {
     const layout = await readLayout(width);
     if (!layout.stacked) throw new Error(`${width}px 导出工作台没有切换为上下布局`);
-    if (layout.horizontalOverflow) throw new Error(`${width}px 导出工作台出现横向溢出`);
+    if (width === 920 && (!layout.horizontalOverflow || !layout.horizontalScrollMoved)) throw new Error(`920px 导出工作台底部没有可拖动的横向滚动条：${JSON.stringify(layout)}`);
+    if (width === 920 && !["auto", "scroll"].includes(layout.horizontalOverflowStyle)) throw new Error("920px 导出工作台隐藏了横向滚动条");
     if (!layout.actionsVisible) throw new Error(`${width}px 导出工作台操作栏不可见`);
   }
   if ((await readLayout(1440)).stacked) throw new Error("1440px 导出工作台不应切换为上下布局");

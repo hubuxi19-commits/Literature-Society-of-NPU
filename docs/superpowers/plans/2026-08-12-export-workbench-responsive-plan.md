@@ -15,7 +15,7 @@
 
 - [ ] Add an `@media (max-width: 1099px) and (min-width: 761px)` rule.
 - [ ] Switch the workbench to one column, make the control grid use three columns where space permits, keep the preview centered and the actions sticky.
-- [ ] Ensure the dialog and workbench use vertical overflow only.
+- [ ] Give medium-width desktop dialogs a real bottom horizontal scrollbar and a stable inner minimum width; keep mobile horizontal overflow disabled.
 - [ ] Re-run browser and complete tests.
 
 ### Task 3: Delivery
